@@ -72,14 +72,17 @@ This offline verification covers the production build, English interface copy, l
 
 Live-AI checking is deliberately separate. Before publication, complete the three-case [English live spot-check](docs/ENGLISH_LIVE_SPOT_CHECK.md).
 
+Public English site: [https://thinkrevise-ai.vercel.app](https://thinkrevise-ai.vercel.app)
+
 ## Current status
 
 - Independent English interface: complete
 - Offline verification: passed on 9 September 2026
 - English-only target-word presentation: verified
 - Separate local Git history: complete
+- Separate private GitHub repository: complete
+- Separate public Vercel deployment: complete (labelled demo mode until its own API key is configured)
 - Live-AI three-case spot-check: pending
-- Separate remote repository and public deployment: pending
 
 For the detailed local acceptance record, see [English Version Acceptance Check](docs/ENGLISH_ACCEPTANCE.md).
 
