@@ -33,5 +33,9 @@ The English version keeps the same learning flow and feedback safeguards as the 
 - [x] Local dependency installation and production build
 - [x] Browser walkthrough of both learning paths
 - [x] Offline feedback and safeguard regression evaluation
-- [ ] Live English AI feedback spot-check after the separate API key is configured
-- [ ] Separate remote repository and deployment
+- [x] Live English AI feedback spot-check with the separate production API configuration
+- [x] Separate private remote repository and public deployment
+
+## Release status
+
+The independent English production site is live at <https://thinkrevise-ai.vercel.app>. On 9 September 2026, the deployed application passed a focused live-AI check covering a multiple-error draft, a correct control and an unverifiable-evidence draft. See [ENGLISH_ACCEPTANCE.md](ENGLISH_ACCEPTANCE.md) for the recorded results and limitations.

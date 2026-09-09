@@ -2,7 +2,7 @@
 
 ThinkRevise AI is an English-interface academic writing and revision coach for university learners. It helps learners identify language problems, evaluate academic claims and revise their own work without surrendering ownership of the writing process.
 
-This repository is the independent English edition. It has its own Git history, environment settings and future deployment. It does not share a repository, deployment project, learner data or automatic synchronization with the Chinese edition.
+This repository is the independent English edition. It has its own Git history, environment settings and production deployment. It does not share a repository, deployment project, learner data or automatic synchronization with the Chinese edition.
 
 ## What is different in this edition
 
@@ -70,7 +70,7 @@ npm run verify
 
 This offline verification covers the production build, English interface copy, learning data, revision behaviour, feedback boundaries, duplicate handling, request budgets, security controls and prompt-injection boundaries. It does not make paid API requests.
 
-Live-AI checking is deliberately separate. Before publication, complete the three-case [English live spot-check](docs/ENGLISH_LIVE_SPOT_CHECK.md).
+Live-AI checking is deliberately separate from the offline suite. The production release completed the three-case [English live spot-check](docs/ENGLISH_LIVE_SPOT_CHECK.md); the recorded results are available in the [English acceptance check](docs/ENGLISH_ACCEPTANCE.md).
 
 Public English site: [https://thinkrevise-ai.vercel.app](https://thinkrevise-ai.vercel.app)
 
@@ -81,8 +81,9 @@ Public English site: [https://thinkrevise-ai.vercel.app](https://thinkrevise-ai.
 - English-only target-word presentation: verified
 - Separate local Git history: complete
 - Separate private GitHub repository: complete
-- Separate public Vercel deployment: complete (labelled demo mode until its own API key is configured)
-- Live-AI three-case spot-check: pending
+- Separate production API configuration: complete; the key remains in the deployment environment and is not committed to Git
+- Separate public Vercel deployment: complete
+- Live-AI three-case spot-check: passed on 9 September 2026
 
 For the detailed local acceptance record, see [English Version Acceptance Check](docs/ENGLISH_ACCEPTANCE.md).
 

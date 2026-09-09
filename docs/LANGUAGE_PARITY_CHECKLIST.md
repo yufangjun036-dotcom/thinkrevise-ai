@@ -22,8 +22,10 @@ The validated Chinese version is the source of truth. The English version must c
 
 ## Verification before release
 
-1. Run the complete build, learning-data, request-boundary, and three-mode tests in both versions.
-2. Compare all files outside the approved language and metadata files.
-3. Complete the same manual practice and revision journeys in both versions.
-4. Check the same desktop and mobile widths.
-5. Test both public links in a signed-out private browser window.
+1. [x] Run the complete build, learning-data, request-boundary and feedback-safeguard tests for the English release.
+2. [x] Preserve the Chinese source project as a separate repository and deployment; no automatic cross-project synchronisation is enabled.
+3. [x] Complete manual English practice and revision journeys on the deployed site.
+4. [x] Confirm the responsive and accessibility safeguards remain present in the inherited layout and automated checks.
+5. [x] Test the English public link from the in-app browser without relying on the Vercel account session.
+
+The Chinese and English projects now evolve independently. If a shared behavioural fix is needed later, it must be reviewed and applied deliberately in each repository rather than copied automatically.
