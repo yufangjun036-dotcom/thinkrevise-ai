@@ -105,7 +105,7 @@ const result = (feedback, draft) => ({ summary: '测试', feedback, modelRevisio
 const englishCaseOne = 'Many student use AI tool for university assignment. Last week, I ask an AI chatbot write two paragraph for my presentation, and it give me several useful idea. However, the information not match our course requirement. My tutor said students need check AI answer carefully before submit their work.';
 const englishCaseOneOutput = f.validateLiveResult(result([], englishCaseOne), englishCaseOne, 'coach', 0, false);
 const englishCaseOneCorrections = englishCaseOneOutput.feedback.map(item => item.correction).join(' ');
-for (const expected of ['many students use AI tools', 'university assignments', 'course requirements']) {
+for (const expected of ['many students use AI tools', 'university assignments', 'asked an AI chatbot to write two paragraphs', 'course requirements', 'need to check AI answers carefully before submitting']) {
   assert.ok(englishCaseOneCorrections.includes(expected), `English live case must preserve correction: ${expected}`);
 }
 const englishAcademicCase = 'A famous 2025 study found that AI tutoring raises university pass rates by 60 percent. The study reportedly tested 4,000 students, but I cannot locate the original paper, its authors or the research method. I used an AI tutor for one month and my quiz score improved. Therefore, every university should immediately replace most lectures with this AI system because it is proven to work for all students.';

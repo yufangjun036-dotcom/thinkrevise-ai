@@ -155,6 +155,8 @@ function findLanguageIssues(draft: string): FeedbackItem[] {
     // the first verb and leaving the rest of the span ungrammatical.
     [/\bmany student use AI tool\b/i, "many students use AI tools", "名词单复数", "many 后使用复数 students；泛指多种 AI 工具时使用复数 tools。"],
     [/\bfor university assignment\b/i, "for university assignments", "冠词与名词形式", "assignment 是单数可数名词；泛指大学作业时使用复数 assignments，若指一项作业则需要冠词 a。"],
+    [/\bLast week, I ask an AI chatbot write two paragraph for my presentation\b/i, "Last week, I asked an AI chatbot to write two paragraphs for my presentation", "时态、动词结构与名词形式", "last week 要求过去式 asked；ask someone 后接 to do；数词 two 后使用复数 paragraphs。"],
+    [/\bstudents need check AI answer carefully before submit their work\b/i, "students need to check AI answers carefully before submitting their work", "动词结构与名词形式", "need 后接 to do；泛指 AI 的答案时使用复数 answers；before 后接动名词 submitting。"],
     [/\bprepare presentation for class\b/i, "prepare presentations for class", "冠词与名词形式", "presentation 是单数可数名词；泛指课堂展示时使用复数 presentations，若指一次展示则需要冠词 a。"],
     [/\bI try AI to make slide content last week\b/i, "I tried AI to create slide content last week", "时态与动词形式", "last week 表示过去时间，谓语应使用过去式 tried；slide content 本身可以作为不可数名词短语。"],
     [/\bIt help me collect example and organize structure fast\b/i, "It helped me collect examples and organize the structure quickly", "时态、名词形式与词形选择", "该句承接 last week 的过去经历，应使用 helped；泛指例子使用复数 examples；修饰动作应使用副词 quickly。"],
