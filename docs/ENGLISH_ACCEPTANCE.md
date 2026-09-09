@@ -4,7 +4,7 @@ Date: 9 September 2026
 
 ## Result
 
-The independent English build passes its local release checks. No paid API request was made.
+The independent English build passes its local release checks and the three-case live-AI spot-check on the production site.
 
 ## Verified
 
@@ -20,8 +20,12 @@ The independent English build passes its local release checks. No paid API reque
 - The independent English source was pushed to its own private GitHub repository.
 - The English site was deployed independently at <https://thinkrevise-ai.vercel.app>.
 - The deployed home page was checked directly: both learning entry points rendered in English and no Chinese characters were present in the visible page text.
+- A separate production API key and English-project environment were configured without committing the key to the repository.
+- Multiple-error case: 13 of 13 underlying language corrections were communicated across 5 grouped feedback cards, with 0 academic false alarms.
+- Correct-control case: 0 language checks and 0 academic suggestions, with no false alarm.
+- Academic-risk case: 0 language checks and 2 academic-evidence suggestions, correctly identifying the unverifiable source and the unsupported universal policy conclusion.
+- All visible headings in the final live results were displayed in English.
 
-## Still required before publication
+## Scope
 
-- Configure a separate API key/environment for the English deployment.
-- Run the three-case [English live-AI spot-check](ENGLISH_LIVE_SPOT_CHECK.md), covering a multiple-error draft, a correct draft and an unverifiable-evidence draft.
+This is a focused release spot-check, not a guarantee that every future draft will be classified perfectly. Keep the [English live-AI spot-check](ENGLISH_LIVE_SPOT_CHECK.md) as the minimum regression set for later changes.
