@@ -21,5 +21,5 @@ The independent English build passes its local release checks. No paid API reque
 ## Still required before publication
 
 - Configure a separate API key/environment for the English deployment.
-- Run a small live-AI spot-check covering a grammatical-error draft, a correct draft and an unverifiable-evidence draft.
+- Run the three-case [English live-AI spot-check](ENGLISH_LIVE_SPOT_CHECK.md), covering a multiple-error draft, a correct draft and an unverifiable-evidence draft.
 - Create a separate remote repository and deployment project.
