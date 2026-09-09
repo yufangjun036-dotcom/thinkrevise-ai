@@ -1,45 +1,45 @@
 import Link from "next/link";
 
 export const metadata = {
-  title: "隐私与 AI 使用说明｜ThinkRevise AI (Chinese)",
+  title: "Privacy and AI Use | ThinkRevise AI",
 };
 
 export default function PrivacyPage() {
   return <main className="privacy-page">
-    <nav><Link href="/">← 返回 ThinkRevise AI</Link></nav>
+    <nav><Link href="/">← Back to ThinkRevise AI</Link></nav>
     <article>
-      <p className="overline">公开测试版说明</p>
-      <h1>隐私与 AI 使用说明</h1>
-      <p className="privacy-lead">ThinkRevise AI 用于学术英语写作练习。请在提交前删除姓名、学号、联系方式、未公开研究数据以及其他个人或敏感信息。</p>
+      <p className="overline">Public testing notice</p>
+      <h1>Privacy and AI Use</h1>
+      <p className="privacy-lead">ThinkRevise AI supports academic English writing practice. Before submitting text, remove names, student numbers, contact details, unpublished research data and any other personal or sensitive information.</p>
 
       <section>
-        <h2>哪些内容会发送给 AI</h2>
-        <p>当你使用实时分析、自定义主题理解或演示初稿生成功能时，当前文章、主题描述、目标词、自我检查和必要的上一轮反馈会发送到服务端，再由服务端发送给 OpenAI API。API 密钥只保存在服务端，不会进入浏览器。</p>
+        <h2>What is sent to AI</h2>
+        <p>When you use live analysis, custom-topic interpretation or demo-draft generation, the current draft, topic description, target words, self-check and necessary previous feedback are sent to the server and then to the OpenAI API. The API key remains on the server and is never sent to your browser.</p>
       </section>
 
       <section>
-        <h2>本项目保存什么</h2>
-        <p>当前版本不要求注册账号，也没有建立保存文章的应用数据库。为了避免刷新时丢稿，写作进度暂存在当前浏览器标签页的 sessionStorage 中；主动重新开始或关闭该标签页会清除这项临时进度。</p>
-        <p>服务端只记录排查故障和控制费用所需的匿名状态，例如请求类型、耗时、令牌数量和错误类别，不应记录完整文章、主题内容或 API 密钥。</p>
+        <h2>What this project stores</h2>
+        <p>This version does not require an account and has no application database for saving essays. To prevent accidental loss after refreshing, progress is stored temporarily in sessionStorage for the current browser tab. Starting over or closing the tab clears this temporary progress.</p>
+        <p>The server records only anonymous operational information needed for troubleshooting and cost control, such as request type, duration, token count and error category. It should not log full drafts, topic content or API keys.</p>
       </section>
 
       <section>
-        <h2>OpenAI 数据处理边界</h2>
-        <p>本项目向 Responses API 发送请求时设置 <code>store: false</code>，并且不主动建立可供本应用再次读取的模型响应记录。根据 OpenAI 官方数据控制说明，API 数据默认不会用于训练模型，除非账户明确选择共享；但默认的滥用监控日志仍可能包含提示和响应，并通常最多保留 30 天。符合条件的组织可以另行申请更严格的数据保留控制。</p>
-        <p><a href="https://developers.openai.com/api/docs/guides/your-data" target="_blank" rel="noreferrer">查看 OpenAI 官方数据控制说明</a></p>
+        <h2>OpenAI data handling</h2>
+        <p>Requests to the Responses API use <code>store: false</code>, and this application does not create model-response records for later retrieval. According to OpenAI&apos;s official data-controls documentation, API data is not used to train models by default unless the account explicitly opts in. Default abuse-monitoring logs may still contain prompts and responses and are generally retained for up to 30 days. Eligible organisations may apply for stricter retention controls.</p>
+        <p><a href="https://developers.openai.com/api/docs/guides/your-data" target="_blank" rel="noreferrer">Read OpenAI&apos;s official data-controls documentation</a></p>
       </section>
 
       <section>
-        <h2>AI 反馈的限制</h2>
-        <p>AI 可能漏掉错误、误判正确表达或改变原意。反馈和最终改写都需要学习者自行核对，不能代替教师评分、事实核查、引用检查或课程对 AI 使用方式的规定。</p>
+        <h2>Limits of AI feedback</h2>
+        <p>AI may miss errors, flag correct language or alter the intended meaning. Learners must check all feedback and final revisions. The tool does not replace teacher assessment, fact-checking, reference verification or course rules for AI use.</p>
       </section>
 
       <section>
-        <h2>公开使用保护</h2>
-        <p>系统会限制单个访客的请求频率、每日次数和同时进行的请求数，并设置全站每日额度保护。达到限制时，文章仍会保留在浏览器中，稍后即可重试。</p>
+        <h2>Public-use safeguards</h2>
+        <p>The service limits request frequency, daily use and concurrent requests per visitor, and it applies a site-wide daily allowance. If a limit is reached, the draft remains in the browser so the learner can try again later.</p>
       </section>
 
-      <p className="privacy-updated">更新日期：2026 年 9 月 8 日</p>
+      <p className="privacy-updated">Updated: 9 September 2026</p>
     </article>
   </main>;
 }

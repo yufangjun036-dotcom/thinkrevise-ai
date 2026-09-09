@@ -11,10 +11,6 @@ export type VocabularyItem = {
   level: LevelId;
 };
 
-import { keywordTranslations } from "./vocabulary-translations.generated.js";
-
-const vocabularyTranslationMap = keywordTranslations as Record<string, string>;
-
 // Custom descriptions are interpreted by the live topic-understanding route.
 // These neutral terms are only an offline fallback when that route is unavailable;
 // they must never be presented as a classification of the learner's topic.
@@ -27,58 +23,58 @@ export const customFallbackWords = [
 export const topics = [
   {
     id: "education-ai" as const,
-    label: "教育与 AI",
-    prompt: "大学学习中的 AI 使用与判断",
+    label: "AI and Education",
+    prompt: "Using and evaluating AI in university learning",
   },
   {
     id: "university" as const,
-    label: "大学生活",
-    prompt: "课程、学习与校园生活",
+    label: "University Life",
+    prompt: "Courses, learning and campus life",
   },
   {
     id: "technology" as const,
-    label: "科技与社会",
-    prompt: "数字工具与社会生活",
+    label: "Technology and Society",
+    prompt: "Digital tools and social life",
   },
   {
     id: "environment" as const,
-    label: "环境与未来",
-    prompt: "校园行动与可持续生活",
+    label: "Environment and the Future",
+    prompt: "Campus action and sustainable living",
   },
   {
     id: "custom" as const,
-    label: "自定义主题",
-    prompt: "描述你真正感兴趣的方向，观点由你自己确定。",
+    label: "Custom Topic",
+    prompt: "Describe what genuinely interests you and choose your own position.",
   },
 ];
 
 export const levels = [
-  { id: "beginner" as const, label: "基础", count: 6, description: "常用词与清晰句型" },
-  { id: "intermediate" as const, label: "进阶", count: 8, description: "学术连接与论证" },
-  { id: "challenge" as const, label: "挑战", count: 10, description: "更精确的学术表达" },
+  { id: "beginner" as const, label: "Foundation", count: 6, description: "Common vocabulary and clear sentence patterns" },
+  { id: "intermediate" as const, label: "Intermediate", count: 8, description: "Academic connections and argumentation" },
+  { id: "challenge" as const, label: "Challenge", count: 10, description: "More precise academic expression" },
 ];
 
 export const helpModes = [
   {
     id: "coach" as const,
-    name: "自主诊断修改",
+    name: "Diagnose My Draft",
     english: "Diagnose My Draft",
-    description: "全面定位问题并解释修改方向，由你完成第二稿，不提供替代句。",
-    learning: "学习参与度最高",
+    description: "Identify and explain issues throughout your draft, then write the second draft yourself without replacement sentences.",
+    learning: "Highest learner involvement",
   },
   {
     id: "model" as const,
-    name: "AI 局部协作",
+    name: "Local AI Support",
     english: "Local AI Support",
-    description: "先查看完整诊断；需要时展开单句或短语示例，再由你完成全文修改。",
-    learning: "适合获得局部支架",
+    description: "Review the full diagnosis, reveal a sentence-level example when needed, and then revise the full text yourself.",
+    learning: "Targeted scaffolding",
   },
   {
     id: "rewrite" as const,
-    name: "直接完整改写",
+    name: "Rewrite for Me",
     english: "Rewrite for Me",
-    description: "AI 直接生成学术化版本；速度最快，但学习参与度最低。",
-    learning: "编辑模式",
+    description: "AI produces a complete academic revision; this is fastest but involves the least learner participation.",
+    learning: "Editing mode",
   },
 ];
 
@@ -91,10 +87,10 @@ export const demoDrafts: Record<TopicId, string> = {
 };
 
 export const demoMainPoints: Record<Exclude<TopicId, "custom">, string> = {
-  "education-ai": "大学应该教学生批判性评估 AI 反馈，以保留独立判断。",
-  university: "大学课程应通过项目、讨论和反思，培养学生成为更独立的学习者。",
-  technology: "数字工具能够提高效率，但需要配合良好的使用习惯，才能保护深度思考。",
-  environment: "大学应把校园设施改进与环境教育结合起来，推动学生形成可持续的生活方式。",
+  "education-ai": "Universities should teach students to evaluate AI feedback critically so that they retain independent judgement.",
+  university: "University courses should use projects, discussion and reflection to help students become more independent learners.",
+  technology: "Digital tools can improve efficiency, but healthy use habits are needed to protect deep thinking.",
+  environment: "Universities should connect campus improvements with environmental education to support sustainable lifestyles.",
 };
 
 /**
@@ -128,7 +124,7 @@ function createExpandedVocabulary(): VocabularyItem[] {
       const level: LevelId = index < 90 ? "beginner" : index < 160 ? "intermediate" : "challenge";
       generated.push({
         word,
-        definition: vocabularyTranslationMap[word] ?? "中文释义暂缺",
+        definition: "",
         collocation: `${word} in ${topic === "education-ai" ? "education" : topic === "university" ? "higher education" : topic}`,
         example: `The analysis examines ${word} and its implications in ${topic === "education-ai" ? "educational settings" : topic === "university" ? "university life" : `${topic} policy and practice`}.`,
         topics: [topic],
@@ -176,7 +172,7 @@ export function pickVocabulary(topic: TopicId, level: LevelId) {
     const words = [...customFallbackWords].sort(() => Math.random() - 0.5);
     const customPool = words.map((word, index) => ({
       word,
-      definition: vocabularyTranslationMap[word] ?? "中文释义暂缺",
+      definition: "",
       collocation: `the role of ${word}`,
       example: `The discussion examines the role of ${word} in this context.`,
       topics: ["custom" as const],
@@ -320,13 +316,13 @@ function demoWordSentence(word: string) {
 export function cleanDemoDraft(draft: string) {
   return draft
     .replace(/\n{1,2}Key terms for this draft (?:are|include):[\s\S]*$/i, "")
-    .replace(/\n{1,2}目标词[^\n]*：?[\s\S]*$/i, "")
+    .replace(/\n{1,2}(?:目标词|Target words)[^\n]*[:：]?[\s\S]*$/i, "")
     .trim();
 }
 
 export function getDemoMainPoint(topic: TopicId, customDescription = "") {
   if (topic !== "custom") return demoMainPoints[topic];
   return customDescription.trim()
-    ? `这个主题会影响人们的选择和经验，文章将从不同角度分析它的影响与意义。`
-    : "这篇文章将提出一个清楚的中心观点，并用原因和例子支持它。";
+    ? "This topic affects people's choices and experiences, and the essay will examine its implications from several perspectives."
+    : "This essay will present a clear central claim and support it with reasons and examples.";
 }

@@ -15,6 +15,66 @@ type RevisionComparison = { initialCount: number; resolved: Array<Pick<FeedbackI
 type CoachResponse = { summary: string; feedback: FeedbackItem[]; modelRevision: string; overview: string[]; meaningRisk: string; provider: "openai" | "demo"; fallbackNotice?: string; revisionComparison?: RevisionComparison };
 type CustomTopicResult = { inferredDirection: string; words: Array<Pick<VocabularyItem, "word" | "definition" | "collocation" | "example">>; provider: "openai" };
 
+const confidenceLabels = { "高": "High", "中": "Medium", "低": "Low" } as const;
+
+function displayCategory(category: string) {
+  const replacements: Array<[string, string]> = [
+    ["语言准确性", "Language accuracy"], ["学术建议", "Academic guidance"], ["学术表达", "Academic expression"],
+    ["拼写与大小写", "Spelling and capitalisation"], ["拼写错误", "Spelling"], ["主谓一致", "Subject–verb agreement"],
+    ["时态与动词形式", "Tense and verb form"], ["时态、名词形式与词形选择", "Tense, noun form and word form"],
+    ["时态、名词形式与句子连接", "Tense, noun form and sentence connection"], ["时态、句子结构与冠词", "Tense, sentence structure and articles"],
+    ["词形选择", "Word form"], ["词形与名词形式", "Word and noun forms"], ["词形选择与主谓一致", "Word form and agreement"],
+    ["冠词与不可数名词", "Articles and uncountable nouns"], ["冠词与名词形式", "Articles and noun forms"],
+    ["名词单复数", "Noun number"], ["名词复数与主谓一致", "Noun number and agreement"], ["名词与动词形式", "Noun and verb forms"],
+    ["名词形式与动词结构", "Noun form and verb structure"], ["名词形式与所有格", "Noun form and possession"],
+    ["所有格与名词形式", "Possession and noun form"], ["句子完整性", "Sentence completeness"],
+    ["句子连接与标点", "Sentence connection and punctuation"], ["连写句", "Run-on sentence"], ["介词搭配", "Preposition choice"],
+    ["冠词使用", "Article use"], ["不可数名词", "Uncountable nouns"], ["大小写", "Capitalisation"],
+    ["论证与证据", "Argument and evidence"], ["论点聚焦", "Claim focus"], ["衔接与连贯", "Cohesion and coherence"],
+    ["表达精确性与语域", "Precision and register"], ["个人化表达", "Personal phrasing"], ["非正式表达", "Informal expression"],
+    ["口语化且不精确", "Conversational and imprecise wording"], ["口语化数量表达", "Conversational quantity expression"],
+    ["时间表达不精确", "Imprecise time expression"], ["口语化表达", "Conversational expression"], ["非正式用词", "Informal wording"],
+    ["术语不够精确", "Imprecise terminology"], ["中心观点与文章结构", "Central claim and structure"], ["论证与解释", "Argument and explanation"],
+    ["中心观点过于宽泛", "Overbroad central claim"], ["宽泛判断", "Broad evaluation"], ["宽泛的程度表达", "Broad degree expression"],
+    ["未经论证的强调", "Unsupported emphasis"], ["绝对化表达", "Absolute claim"], ["过度确定的证据表述", "Overstated evidence"],
+  ];
+  return replacements.reduce((text, [source, target]) => text.replace(source, target), category);
+}
+
+function displayWhy(item: FeedbackItem) {
+  if (!/[\p{Script=Han}]/u.test(item.why)) return item.why;
+  const category = displayCategory(item.category);
+  if (item.category.startsWith("语言")) return `The highlighted passage contains a ${category.replace(/^Language accuracy · /, "").toLowerCase()} issue that affects language accuracy.`;
+  if (/论证与证据/.test(item.category)) return "The claim needs stronger, verifiable evidence or a more carefully limited conclusion.";
+  if (/论点聚焦/.test(item.category)) return "The central claim is too broad or insufficiently focused for the support provided.";
+  if (/衔接与连贯/.test(item.category)) return "The relationship between these ideas needs a clearer logical connection.";
+  return "This expression needs greater precision or a more appropriate academic register.";
+}
+
+function displayCorrection(item: FeedbackItem) {
+  if (!/[\p{Script=Han}]/u.test(item.correction || "")) return item.correction || "Revise this passage in your own words using the guidance above.";
+  const directEdit = item.correction?.split("。")[0]?.trim();
+  if (directEdit?.includes("→") && !/[\p{Script=Han}]/u.test(directEdit)) return `${directEdit}.`;
+  return item.category.startsWith("语言")
+    ? "Correct the highlighted form while preserving the intended meaning."
+    : "Limit the claim to what the available context and evidence can support.";
+}
+
+function displaySummary(response: CoachResponse) {
+  if (!/[\p{Script=Han}]/u.test(response.summary)) return response.summary;
+  return response.feedback.length
+    ? `This review located ${response.feedback.length} items, including language checks and academic suggestions. Review each item rather than treating the total as an error count.`
+    : "No sufficiently supported, locatable issue was found. This does not guarantee that the text has no problems.";
+}
+
+function displayFallbackNotice(response: CoachResponse) {
+  if (response.fallbackNotice && !/[\p{Script=Han}]/u.test(response.fallbackNotice)) return response.fallbackNotice;
+  if (response.provider === "openai") return "AI judgements may be wrong. Review each item yourself.";
+  return response.fallbackNotice
+    ? "Live AI is temporarily unavailable, so the system has switched to preconfigured demo feedback."
+    : "No API key is required; suitable for demonstrations and temporary fallback.";
+}
+
 function isCoachResponse(value: unknown): value is CoachResponse {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<CoachResponse>;
@@ -28,7 +88,7 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
   try {
     return await response.json() as T;
   } catch {
-    throw new Error("服务返回的内容格式异常，请重试；你的文章仍保留在当前页面。");
+    throw new Error("The service returned an unexpected response. Please try again; your draft is still saved on this page.");
   }
 }
 
@@ -52,28 +112,28 @@ function apiRequestHeaders() {
 
 const revisionLoopSlides = [
   {
-    label: "原始想法",
+    label: "Original idea",
     sample: "Online learning is useful for university students...",
-    note: "先写下自己的观点，不追求第一稿完美。",
+    note: "Start with your own ideas; the first draft does not need to be perfect.",
   },
   {
-    label: "AI 诊断",
-    sample: "“useful” 的含义较宽泛，读者还不知道具体益处。",
-    note: "AI 定位问题并解释原因，但不替你完成思考。",
+    label: "AI diagnosis",
+    sample: "“Useful” is too broad here; readers still do not know the specific benefit.",
+    note: "AI locates and explains issues without doing the thinking for you.",
   },
   {
-    label: "学生修改",
+    label: "Your revision",
     sample: "Online learning gives students more flexible access...",
-    note: "根据反馈，用自己的语言把观点写得更具体。",
+    note: "Use the feedback to make the idea more specific in your own words.",
   },
   {
-    label: "完成与反思",
+    label: "Complete and reflect",
     sample: "Online learning can widen access by reducing limits of time and place.",
-    note: "比较修改前后，总结可以迁移到下次写作的原则。",
+    note: "Compare the versions and identify a principle you can use next time.",
   },
 ] as const;
 
-const DEFAULT_GOAL = "澄清并聚焦中心论点";
+const DEFAULT_GOAL = "Clarify and focus the central claim";
 const DEFAULT_WEAKNESS = "";
 const SESSION_RECOVERY_KEY = "thinkrevise-session-v1";
 const LEGACY_SESSION_RECOVERY_KEY = "revisioncoach-session-v1";
@@ -128,7 +188,7 @@ function HighlightedDraft({ text, feedback }: { text: string; feedback: Feedback
   let cursor = 0;
   for (const range of ranges) {
     if (range.start > cursor) content.push(text.slice(cursor, range.start));
-    content.push(<mark className="draft-error-mark" key={`${range.start}-${range.end}`} title="AI 标记的问题位置">{text.slice(range.start, range.end)}</mark>);
+    content.push(<mark className="draft-error-mark" key={`${range.start}-${range.end}`} title="Issue located by AI">{text.slice(range.start, range.end)}</mark>);
     cursor = range.end;
   }
   if (cursor < text.length) content.push(text.slice(cursor));
@@ -174,7 +234,7 @@ function InteractiveHighlightedDraft({
               if (!issueRefs.current.has(index)) issueRefs.current.set(index, node);
             }
           }}
-          aria-label={`查看问题：${range.issueIndexes.map((index) => feedback[index].category).join("、")}`}
+          aria-label={`View issue: ${range.issueIndexes.map((index) => displayCategory(feedback[index].category)).join(", ")}`}
           aria-expanded={isOpen}
           onFocus={() => { if (pinnedIssue === null) onShowIssue(range.issueIndexes[0]); }}
           onBlur={() => { if (pinnedIssue === null) onShowIssue(null); }}
@@ -182,13 +242,13 @@ function InteractiveHighlightedDraft({
         >
           {text.slice(range.start, range.end)}
         </button>
-        {isOpen && item && <span className="inline-issue-popover" role="dialog" aria-label={`问题 ${issueIndex + 1} 的修改提示`}>
-          <span className="inline-issue-heading"><strong>问题 {issueIndex + 1} / {feedback.length} · {item.category}</strong><button type="button" onClick={onDismiss} aria-label="关闭修改提示">×</button></span>
-          <span className="inline-issue-copy">{item.why}</span>
-          <span className="inline-issue-label">修改方向</span>
-          <span className="inline-issue-copy correction">{item.correction || "请根据诊断，用自己的语言完成修改。"}</span>
-          {range.issueIndexes.length > 1 && <small>这一位置关联 {range.issueIndexes.length} 项问题；可用上方问题导航逐项查看。</small>}
-          <em>{pinnedIssue === issueIndex ? "提示已固定，修改右侧文字时不会消失。" : "点击红线可固定此提示。"}</em>
+        {isOpen && item && <span className="inline-issue-popover" role="dialog" aria-label={`Revision guidance for issue ${issueIndex + 1}`}>
+          <span className="inline-issue-heading"><strong>Issue {issueIndex + 1} / {feedback.length} · {displayCategory(item.category)}</strong><button type="button" onClick={onDismiss} aria-label="Close revision guidance">×</button></span>
+          <span className="inline-issue-copy">{displayWhy(item)}</span>
+          <span className="inline-issue-label">How to revise</span>
+          <span className="inline-issue-copy correction">{displayCorrection(item)}</span>
+          {range.issueIndexes.length > 1 && <small>This location is linked to {range.issueIndexes.length} issues. Use the issue navigator above to review each one.</small>}
+          <em>{pinnedIssue === issueIndex ? "This guidance is pinned and will stay visible while you edit." : "Click the underlined text to pin this guidance."}</em>
         </span>}
       </span>,
     );
@@ -211,20 +271,20 @@ function CheckIcon() {
 }
 
 function Brand({ compact = false }: { compact?: boolean }) {
-  return <button className="brand brand-button" type="button" onClick={() => { window.sessionStorage.removeItem(SESSION_RECOVERY_KEY); window.sessionStorage.removeItem(LEGACY_SESSION_RECOVERY_KEY); window.location.reload(); }} aria-label="返回 ThinkRevise AI 中文版首页并重新开始"><span className="brand-mark">T</span><span><strong>ThinkRevise AI</strong>{!compact && <small>Chinese · 学术英语教练</small>}</span></button>;
+  return <button className="brand brand-button" type="button" onClick={() => { window.sessionStorage.removeItem(SESSION_RECOVERY_KEY); window.sessionStorage.removeItem(LEGACY_SESSION_RECOVERY_KEY); window.location.reload(); }} aria-label="Return to the ThinkRevise AI home page and start again"><span className="brand-mark">T</span><span><strong>ThinkRevise AI</strong>{!compact && <small>Academic Writing Coach</small>}</span></button>;
 }
 
 function Progress({ stage, helpMode }: { stage: Stage; helpMode: HelpMode }) {
   if (helpMode === "rewrite") {
     const stages: Stage[] = ["setup", "draft", "revise"];
-    const labels = ["选择模式", "填写初稿", "查看改写"];
+    const labels = ["Choose mode", "Add your draft", "Review revision"];
     const index = Math.max(0, stages.indexOf(stage));
-    return <div className="step-progress" aria-label={`当前步骤：${labels[index]}`}><div className="step-progress-copy"><span>编辑进度</span><strong>{index + 1} / 3 · {labels[index]}</strong></div><div className="step-progress-track"><span style={{ width: `${((index + 1) / 3) * 100}%` }} /></div></div>;
+    return <div className="step-progress" aria-label={`Current step: ${labels[index]}`}><div className="step-progress-copy"><span>Editing progress</span><strong>{index + 1} / 3 · {labels[index]}</strong></div><div className="step-progress-track"><span style={{ width: `${((index + 1) / 3) * 100}%` }} /></div></div>;
   }
   const stages: Stage[] = ["setup", "draft", "feedback", "revise", "reflect"];
-  const labels = ["设置任务", "完成初稿", "理解反馈", "亲自修改", "复检反思"];
+  const labels = ["Set your task", "Complete draft", "Review feedback", "Revise yourself", "Recheck and reflect"];
   const index = Math.max(0, stages.indexOf(stage));
-  return <div className="step-progress" aria-label={`当前步骤：${labels[index]}`}><div className="step-progress-copy"><span>学习进度</span><strong>{index + 1} / 5 · {labels[index]}</strong></div><div className="step-progress-track"><span style={{ width: `${((index + 1) / 5) * 100}%` }} /></div></div>;
+  return <div className="step-progress" aria-label={`Current step: ${labels[index]}`}><div className="step-progress-copy"><span>Learning progress</span><strong>{index + 1} / 5 · {labels[index]}</strong></div><div className="step-progress-track"><span style={{ width: `${((index + 1) / 5) * 100}%` }} /></div></div>;
 }
 
 export default function CoachWorkspace() {
@@ -269,10 +329,10 @@ export default function CoachWorkspace() {
   const [recoveryReady, setRecoveryReady] = useState(false);
 
   const selectedTopic = topics.find((item) => item.id === topic) ?? topics[0];
-  const activeTopicLabel = topic === "custom" ? customInterpretation?.inferredDirection || "自定义方向" : selectedTopic.label;
+  const activeTopicLabel = topic === "custom" ? customInterpretation?.inferredDirection || "Custom direction" : selectedTopic.label;
   const topicContext = topic === "custom"
-    ? `学习者描述的主题：${customTopic.trim() || activeTopicLabel}。系统理解方向：${activeTopicLabel}`
-    : `当前主题：${activeTopicLabel}`;
+    ? `Learner-described topic: ${customTopic.trim() || activeTopicLabel}. Interpreted direction: ${activeTopicLabel}`
+    : `Current topic: ${activeTopicLabel}`;
   const canContinueSetup = path !== "practice" || topic !== "custom" || Boolean(customTopic.trim());
   const draftWordCount = useMemo(() => countWords(draft), [draft]);
   const revisedWordCount = useMemo(() => countWords(revisedDraft), [revisedDraft]);
@@ -360,7 +420,7 @@ export default function CoachWorkspace() {
           if (typeof saved.revisedDraft === "string") setRevisedDraft(limitNonWhitespaceCharacters(saved.revisedDraft));
           if (typeof saved.finalDraft === "string") setFinalDraft(limitNonWhitespaceCharacters(saved.finalDraft));
           if (typeof saved.reflection === "string") setReflection(saved.reflection.slice(0, 1000));
-          setDemoNotice("已恢复本标签页刷新前的写作进度。请核对内容后继续。");
+          setDemoNotice("Your writing progress from before this tab was refreshed has been restored. Please review it before continuing.");
       }
       setRecoveryReady(true);
     });
@@ -401,8 +461,8 @@ export default function CoachWorkspace() {
     const lifecycle = new AbortController();
     void Promise.resolve(modelContext.registerTool({
       name: "start_revision_session",
-      title: "开始英语修改练习",
-      description: "在当前页面开始主题写作练习或学术英语修改流程。",
+      title: "Start an English revision activity",
+      description: "Begin a theme writing activity or academic English revision flow on this page.",
       inputSchema: {
         type: "object",
         properties: { path: { type: "string", enum: ["practice", "revision"] } },
@@ -412,7 +472,7 @@ export default function CoachWorkspace() {
       annotations: { readOnlyHint: false, untrustedContentHint: false },
       execute(input: unknown) {
         const value = input as { path?: unknown };
-        if (value.path !== "practice" && value.path !== "revision") throw new Error("path 必须是 practice 或 revision");
+        if (value.path !== "practice" && value.path !== "revision") throw new Error("path must be practice or revision");
         draftRef.current = "";
         setDraft("");
         setIsResolvingTopic(false);
@@ -505,7 +565,7 @@ export default function CoachWorkspace() {
     if (topicController.current) return false;
     const description = customTopic.trim();
     if (description.length < 6) {
-      setError("请至少用几句话描述你真正想写的方向。");
+      setError("Please describe what you genuinely want to write about in at least a few sentences.");
       return false;
     }
     const requestId = ++demoRequest.current;
@@ -522,22 +582,22 @@ export default function CoachWorkspace() {
       });
       const data = await readJsonResponse<Partial<CustomTopicResult> & { error?: string }>(result);
       if (requestId !== demoRequest.current) return false;
-      if (!result.ok) throw new Error(data.error || "暂时无法理解这个方向。");
+      if (!result.ok) throw new Error(data.error || "We could not interpret this direction just now.");
       if (data.provider !== "openai" || typeof data.inferredDirection !== "string" || !Array.isArray(data.words)) {
-        throw new Error("主题理解结果不完整，请重试。");
+        throw new Error("The topic interpretation was incomplete. Please try again.");
       }
       const mappedWords: VocabularyItem[] = data.words.map((item, index) => ({
         ...item,
         topics: ["custom" as const],
         level: index < 6 ? "beginner" as const : index < 8 ? "intermediate" as const : "challenge" as const,
       }));
-      if (mappedWords.length < (levels.find((item) => item.id === level)?.count ?? 8)) throw new Error("主题目标词数量不足，请重试。");
+      if (mappedWords.length < (levels.find((item) => item.id === level)?.count ?? 8)) throw new Error("Not enough target words were generated. Please try again.");
       setCustomInterpretation({ inferredDirection: data.inferredDirection });
       setWords(mappedWords);
       return true;
     } catch (requestError) {
       if (requestId !== demoRequest.current) return false;
-      if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : "暂时无法理解这个方向，请稍后重试。");
+      if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : "We could not interpret this direction. Please try again later.");
       return false;
     } finally {
       if (topicController.current === controller) topicController.current = null;
@@ -581,9 +641,9 @@ export default function CoachWorkspace() {
     if (draft && draft === lastDemo.current) {
       updateDraft("");
       setSelfCheck({ mainPoint: "", strongest: "", weakness: DEFAULT_WEAKNESS, help: goal });
-      setDemoNotice("目标词已更新，请再次填入演示初稿，生成匹配本轮的新文章。");
+      setDemoNotice("The target words have changed. Generate the demo draft again to create a new matching text.");
     } else {
-      setDemoNotice(draft ? "目标词已更新，你编辑的初稿已保留；请核对新目标词，或再次填入演示初稿。" : "目标词已更新，可以开始写作或生成演示初稿。");
+      setDemoNotice(draft ? "The target words have changed and your draft has been kept. Review the new words or generate another demo draft." : "The target words have changed. You can start writing or generate a demo draft.");
     }
   }
 
@@ -591,7 +651,7 @@ export default function CoachWorkspace() {
     if (demoDraftController.current) return;
     if (path !== "practice") {
       updateDraft(cleanDemoDraft(buildDemoDraft("education-ai", [])));
-      if (helpMode !== "rewrite") setSelfCheck({ ...selfCheck, mainPoint: getDemoMainPoint("education-ai"), weakness: "多个方面均需要改进，希望进行综合诊断" });
+      if (helpMode !== "rewrite") setSelfCheck({ ...selfCheck, mainPoint: getDemoMainPoint("education-ai"), weakness: "Several areas need improvement; I would like a comprehensive diagnosis" });
       return;
     }
     const requestId = ++demoRequest.current;
@@ -602,8 +662,8 @@ export default function CoachWorkspace() {
     setRevisionResponse(null);
     setRevisedDraft("");
     setFinalDraft("");
-    setSelfCheck({ mainPoint: getDemoMainPoint(topic, customTopic), strongest: "", weakness: "多个方面均需要改进，希望进行综合诊断", help: goal });
-    setDemoNotice("正在生成匹配当前方向与全部目标词的新演示稿……");
+    setSelfCheck({ mainPoint: getDemoMainPoint(topic, customTopic), strongest: "", weakness: "Several areas need improvement; I would like a comprehensive diagnosis", help: goal });
+    setDemoNotice("Generating a new demo draft that matches this direction and all target words…");
     setIsGeneratingDemo(true);
     setError("");
     const controller = new AbortController();
@@ -612,24 +672,24 @@ export default function CoachWorkspace() {
     try {
       const result = await fetch("/api/demo-draft", {
         method: "POST", signal: controller.signal, headers: apiRequestHeaders(),
-        body: JSON.stringify({ topic: `${topicContext}。请生成围绕这一主题背景、但允许学习者自由确定观点的英文演示初稿。`, words: words.map((word) => word.word), previousDraft: previousAiDraft }),
+        body: JSON.stringify({ topic: `${topicContext}. Generate an English demo draft within this topic while allowing the learner to choose their own position.`, words: words.map((word) => word.word), previousDraft: previousAiDraft }),
       });
       const data = await readJsonResponse<{ draft: string; mainPoint: string; error?: string }>(result);
       if (requestId !== demoRequest.current) return;
-      if (!result.ok) throw new Error(data.error || "暂时无法生成演示稿，请重试。");
+      if (!result.ok) throw new Error(data.error || "We could not generate a demo draft just now. Please try again.");
       if (draftRef.current !== startingDraft) return;
       updateDraft(data.draft); lastDemo.current = data.draft;
       setResponse(null);
       setRevisionResponse(null);
       setRevisedDraft("");
       setFinalDraft("");
-      setSelfCheck({ mainPoint: data.mainPoint, strongest: "", weakness: "多个方面均需要改进，希望进行综合诊断", help: goal });
-      setDemoNotice("已生成本轮新演示稿，包含全部目标词。稿中的错误是刻意设置的练习内容。");
+      setSelfCheck({ mainPoint: data.mainPoint, strongest: "", weakness: "Several areas need improvement; I would like a comprehensive diagnosis", help: goal });
+      setDemoNotice("A new demo draft containing every target word has been generated. Its errors are intentional practice material.");
     } catch {
       if (requestId !== demoRequest.current || draftRef.current !== startingDraft) return;
       updateDraft(quickDraft);
       lastDemo.current = quickDraft;
-      setDemoNotice("真实 AI 本次未及时返回，已填入包含全部目标词的备用练习稿；你可以再次点击生成新稿。");
+      setDemoNotice("Live AI did not respond in time, so a backup practice draft containing all target words has been added. You can generate another draft if you wish.");
     } finally {
       window.clearTimeout(timeout);
       if (demoDraftController.current === controller) demoDraftController.current = null;
@@ -642,8 +702,8 @@ export default function CoachWorkspace() {
     demoRequest.current += 1;
     setError("");
     setRevisionError("");
-    if (countNonWhitespaceCharacters(draft) < 20) { setError("请先输入一段至少 20 个非空白字符的英文初稿。你也可以使用演示初稿快速体验。"); return; }
-    if (helpMode !== "rewrite" && (!selfCheck.mainPoint || !selfCheck.weakness || !selfCheck.help)) { setError("获得 AI 反馈前，请先完成核心论点、自我评估和希望获得帮助的检查。"); return; }
+    if (countNonWhitespaceCharacters(draft) < 20) { setError("Please enter an English draft containing at least 20 non-whitespace characters. You can also use the demo draft."); return; }
+    if (helpMode !== "rewrite" && (!selfCheck.mainPoint || !selfCheck.weakness || !selfCheck.help)) { setError("Before requesting AI feedback, complete the central-claim, self-assessment and support-preference fields."); return; }
     setResponse(null);
     setRevisionResponse(null);
     setRecordCopied(false);
@@ -656,7 +716,7 @@ export default function CoachWorkspace() {
       const result = await fetch("/api/coach", { method: "POST", signal: controller.signal, headers: apiRequestHeaders(), body: JSON.stringify({ draft, mode: helpMode, goal, selfCheck, taskPrompt: path === "practice" ? topicContext : undefined }) });
       const data = await readJsonResponse<CoachResponse & { error?: string }>(result);
       if (controller.signal.aborted) return;
-      if (!result.ok) throw new Error(data.error || "暂时无法分析这段文字。");
+      if (!result.ok) throw new Error(data.error || "We could not analyse this text just now.");
       setResponse(data);
       setRevisionResponse(null);
       setRevisedDraft(draft);
@@ -664,7 +724,7 @@ export default function CoachWorkspace() {
       setStage(helpMode === "rewrite" ? "revise" : "feedback");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (requestError) {
-      if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : "暂时无法分析，请稍后重试；你的文章仍保留在当前页面。");
+      if (!controller.signal.aborted) setError(requestError instanceof Error ? requestError.message : "We could not analyse the text. Please try again later; your draft is still saved on this page.");
     } finally {
       if (feedbackController.current === controller) {
         feedbackController.current = null;
@@ -678,11 +738,11 @@ export default function CoachWorkspace() {
     setRevisionError("");
     const trimmedRevision = revisedDraft.trim();
     if (countNonWhitespaceCharacters(trimmedRevision) < 20) {
-      setRevisionError("请先完成一篇至少 20 个非空白字符的第二稿。");
+      setRevisionError("Please complete a second draft containing at least 20 non-whitespace characters.");
       return;
     }
     if (trimmedRevision === draft.trim()) {
-      setRevisionError("第二稿尚未发生变化。请先根据反馈完成至少一处修改，再提交复检。");
+      setRevisionError("The second draft has not changed yet. Make at least one revision based on the feedback before submitting it for another review.");
       return;
     }
     if (!response) return;
@@ -700,7 +760,7 @@ export default function CoachWorkspace() {
           draft: trimmedRevision,
           originalDraft: draft,
           mode: "rewrite",
-          goal: "复检第二稿中仍存在的问题，并生成最终规范学术版本",
+          goal: "Recheck issues that remain in the second draft and generate a final academic version",
           selfCheck,
           taskPrompt: path === "practice" ? topicContext : undefined,
           priorFeedback: response.feedback.map(({ category, quote, why, correction, confidence }) => ({
@@ -714,14 +774,14 @@ export default function CoachWorkspace() {
       });
       const data = await readJsonResponse<CoachResponse & { error?: string }>(result);
       if (controller.signal.aborted) return;
-      if (!result.ok) throw new Error(data.error || "暂时无法重新分析第二稿。");
+      if (!result.ok) throw new Error(data.error || "We could not reanalyse the second draft just now.");
       const secondAnalysis = data as CoachResponse;
       setRevisionResponse(secondAnalysis);
       setFinalDraft(secondAnalysis.modelRevision || trimmedRevision);
       setStage("reflect");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (requestError) {
-      if (!controller.signal.aborted) setRevisionError(requestError instanceof Error ? requestError.message : "暂时无法重新分析第二稿，请稍后重试；你的第二稿仍保留在当前页面。");
+      if (!controller.signal.aborted) setRevisionError(requestError instanceof Error ? requestError.message : "We could not reanalyse the second draft. Please try again later; your second draft is still saved on this page.");
     } finally {
       if (revisionController.current === controller) {
         revisionController.current = null;
@@ -750,72 +810,72 @@ export default function CoachWorkspace() {
   if (stage === "home") {
     const loopSlide = revisionLoopSlides[loopStep];
     return <main className="site-shell">
-      <header className="topbar"><Brand /><div className="prototype-badge"><span aria-hidden="true" /> 中文版候选版</div></header>
-      <section className="hero" id="top"><div className="hero-copy"><p className="overline">为多语言大学生设计</p><h1>从写出第一稿，<span>到看见自己的进步。</span></h1><p className="hero-intro">先保留你的想法，再用恰到好处的 AI 支持发现问题、完成修改，并解释你真正学会了什么。</p><div className="learning-loop" aria-label="学习过程"><span>先思考</span><i /><span>再反馈</span><i /><span>自己修改</span></div></div>
-      {mediaConfig.homeHeroImage ? <figure className="hero-image-card"><Image src={mediaConfig.homeHeroImage} alt={mediaConfig.homeHeroAlt} fill sizes="(max-width: 900px) 100vw, 38vw" priority /><figcaption>保留自己的观点，再决定如何使用 AI 反馈。</figcaption></figure> : <div className="progress-card" aria-label="四步修改循环，可左右滑动" onPointerDown={(event) => { loopDragStartX.current = event.clientX; }} onPointerUp={(event) => finishLoopDrag(event.clientX)} onPointerCancel={() => { loopDragStartX.current = null; }}><div className="progress-topline"><span>你的修改循环</span><strong>{loopStep + 1} / {revisionLoopSlides.length}</strong></div><div className="progress-track"><span style={{ width: `${((loopStep + 1) / revisionLoopSlides.length) * 100}%` }} /></div><div className="paper-preview" aria-live="polite"><span className="paper-label">{loopSlide.label}</span><p>{loopSlide.sample}</p><div className="feedback-line"><SparkIcon /><span>{loopSlide.note}</span></div></div><div className="loop-navigation"><button type="button" className="loop-arrow" onClick={() => moveLoop(-1)} aria-label="查看修改循环上一步"><ArrowIcon back /></button><div className="loop-dots" aria-label="选择修改循环步骤">{revisionLoopSlides.map((slide, index) => <button key={slide.label} type="button" className={index === loopStep ? "active" : ""} onClick={() => setLoopStep(index)} aria-label={`第 ${index + 1} 步：${slide.label}`} aria-current={index === loopStep ? "step" : undefined} />)}</div><button type="button" className="loop-arrow" onClick={() => moveLoop(1)} aria-label="查看修改循环下一步"><ArrowIcon /></button></div><p className="ownership-note">可左右滑动查看完整过程 · AI 不替你思考</p></div>}</section>
-      <section className="mode-section" aria-labelledby="mode-title"><div className="section-heading"><div><p className="overline">选择一个入口</p><h2 id="mode-title">今天，你想怎样练习？</h2></div><p>两个入口使用同一套“初稿—反馈—修改—反思”学习循环。</p></div>
-      <div className="mode-grid"><button className="mode-card practice-card" type="button" onClick={() => startPath("practice")}><span className="card-number">01</span><span className="card-kicker">从关键词开始</span><strong>主题写作练习</strong><span className="card-description">选择感兴趣的主题，获得适合当前水平的英文词汇，再用自己的观点完成一篇短文。</span><span className="word-cloud"><i>evidence</i><i>access</i><i>engage</i><i>reflect</i><i>however</i></span><span className="card-cta">进入写作练习 <ArrowIcon /></span></button>
-      <button className="mode-card revision-card" type="button" onClick={() => startPath("revision")}><span className="card-number">02</span><span className="card-kicker">从你的初稿开始</span><strong>学术英语修改</strong><span className="card-description">粘贴不够正式或存在错误的英文，选择自主诊断、AI 局部协作或直接完整改写。</span><span className="revision-sample"><span className="sample-row muted">I think this result is really good...</span><span className="sample-connector" /><span className="sample-row improved">The findings indicate a positive outcome...</span></span><span className="card-cta">进入修改工作室 <ArrowIcon /></span></button></div></section>
-      <footer><p>为学习而设计，而不是替你完成思考。</p><span>无需登录 · 演示内容不会自动公开 · <Link href="/privacy">隐私与 AI 使用说明</Link></span></footer>
+      <header className="topbar"><Brand /><div className="prototype-badge"><span aria-hidden="true" /> English candidate</div></header>
+      <section className="hero" id="top"><div className="hero-copy"><p className="overline">Designed for multilingual university students</p><h1>Start with a first draft. <span>See how your writing improves.</span></h1><p className="hero-intro">Keep ownership of your ideas, then use carefully scoped AI support to identify issues, revise your text and explain what you have learned.</p><div className="learning-loop" aria-label="Learning process"><span>Think first</span><i /><span>Review feedback</span><i /><span>Revise yourself</span></div></div>
+      {mediaConfig.homeHeroImage ? <figure className="hero-image-card"><Image src={mediaConfig.homeHeroImage} alt={mediaConfig.homeHeroAlt} fill sizes="(max-width: 900px) 100vw, 38vw" priority /><figcaption>Keep your own position, then decide how to use AI feedback.</figcaption></figure> : <div className="progress-card" aria-label="Four-step revision cycle; swipe left or right" onPointerDown={(event) => { loopDragStartX.current = event.clientX; }} onPointerUp={(event) => finishLoopDrag(event.clientX)} onPointerCancel={() => { loopDragStartX.current = null; }}><div className="progress-topline"><span>Your revision cycle</span><strong>{loopStep + 1} / {revisionLoopSlides.length}</strong></div><div className="progress-track"><span style={{ width: `${((loopStep + 1) / revisionLoopSlides.length) * 100}%` }} /></div><div className="paper-preview" aria-live="polite"><span className="paper-label">{loopSlide.label}</span><p>{loopSlide.sample}</p><div className="feedback-line"><SparkIcon /><span>{loopSlide.note}</span></div></div><div className="loop-navigation"><button type="button" className="loop-arrow" onClick={() => moveLoop(-1)} aria-label="Previous revision step"><ArrowIcon back /></button><div className="loop-dots" aria-label="Choose a revision step">{revisionLoopSlides.map((slide, index) => <button key={slide.label} type="button" className={index === loopStep ? "active" : ""} onClick={() => setLoopStep(index)} aria-label={`Step ${index + 1}: ${slide.label}`} aria-current={index === loopStep ? "step" : undefined} />)}</div><button type="button" className="loop-arrow" onClick={() => moveLoop(1)} aria-label="Next revision step"><ArrowIcon /></button></div><p className="ownership-note">Swipe to see the complete process · AI does not think for you</p></div>}</section>
+      <section className="mode-section" aria-labelledby="mode-title"><div className="section-heading"><div><p className="overline">Choose a starting point</p><h2 id="mode-title">How would you like to practise today?</h2></div><p>Both options use the same draft–feedback–revision–reflection learning cycle.</p></div>
+      <div className="mode-grid"><button className="mode-card practice-card" type="button" onClick={() => startPath("practice")}><span className="card-number">01</span><span className="card-kicker">Start with target words</span><strong>Theme Writing Practice</strong><span className="card-description">Choose a topic, receive English target words suited to your level and write a short text expressing your own position.</span><span className="word-cloud"><i>evidence</i><i>access</i><i>engage</i><i>reflect</i><i>however</i></span><span className="card-cta">Start writing practice <ArrowIcon /></span></button>
+      <button className="mode-card revision-card" type="button" onClick={() => startPath("revision")}><span className="card-number">02</span><span className="card-kicker">Start with your draft</span><strong>Academic English Revision</strong><span className="card-description">Paste an English draft that may contain errors or informal language, then choose diagnosis, limited AI collaboration or a full rewrite.</span><span className="revision-sample"><span className="sample-row muted">I think this result is really good...</span><span className="sample-connector" /><span className="sample-row improved">The findings indicate a positive outcome...</span></span><span className="card-cta">Open the revision studio <ArrowIcon /></span></button></div></section>
+      <footer><p>Designed for learning, not for replacing your thinking.</p><span>No sign-in required · Demo content is not made public automatically · <Link href="/privacy">Privacy and AI use</Link></span></footer>
     </main>;
   }
 
-  return <main className="workspace-shell"><header className="workspace-header"><Brand compact /><Progress stage={stage} helpMode={helpMode} /><div className="prototype-badge"><span /> 中文版候选版</div></header><div className="workspace-body"><button className="back-button" type="button" onClick={goBack}><ArrowIcon back /> 返回上一步</button>
-    {stage === "setup" && <section className="flow-panel setup-panel"><div className="flow-heading"><p className="overline">步骤 1 · 设置任务</p><h1>{path === "practice" ? "准备一次主题写作练习" : "这一次，你希望 AI 怎样帮助你？"}</h1><p>{path === "practice" ? "先选择一个主题背景，观点和文章角度由你自己确定；系统只据此筛选相关词汇。" : "帮助越直接，完成速度越快；但学习者亲自思考和修改的机会也会减少。"}</p></div>
-      {path === "practice" ? <div className="setup-columns"><fieldset className="choice-fieldset"><legend>选择或描述你感兴趣的主题</legend><div className="topic-choices">{topics.map((item) => <button key={item.id} type="button" aria-pressed={topic === item.id} className={topic === item.id ? "active" : ""} onClick={() => selectTopic(item.id)}><span>{item.label}</span><small>{item.prompt}</small></button>)}</div>{topic === "custom" && <div className="custom-topic-fields"><label><span>用中文描述你的方向 <em>必填</em></span><textarea value={customTopic} maxLength={200} onChange={(event) => updateCustomTopic(event.target.value)} placeholder="例如：我想讨论短视频推荐如何影响年轻人的审美、选择和社群关系。" /></label><label><span>补充你想讨论的角度 <em>选填</em></span><textarea value={customQuestion} maxLength={300} onChange={(event) => updateCustomQuestion(event.target.value)} placeholder="例如：我想比较个人选择与平台引导之间的关系。" /></label><small>可以用一到三句话描述任何场景、人物关系、经历或社会现象，不需要先给主题标签。系统会据此匹配英文目标词，但不会规定你必须回答哪一个问题。</small></div>}</fieldset><fieldset className="choice-fieldset"><legend>选择练习难度</legend><div className="level-choices">{levels.map((item) => <button key={item.id} type="button" aria-pressed={level === item.id} className={level === item.id ? "active" : ""} onClick={() => selectLevel(item.id)}><strong>{item.label}</strong><span>{item.count} 个目标词</span><small>{item.description}</small></button>)}</div></fieldset></div> : <><fieldset className="choice-fieldset"><legend>选择帮助程度</legend><div className="help-grid">{helpModes.map((item, index) => <button key={item.id} type="button" aria-pressed={helpMode === item.id} className={`${helpMode === item.id ? "active" : ""} ${item.id === "rewrite" ? "editing-mode" : ""}`} onClick={() => setHelpMode(item.id)}><span className="mode-index">0{index + 1}</span><strong>{item.name}</strong><p>{item.description}</p><em>{item.learning}</em></button>)}</div></fieldset>{helpMode === "rewrite" && <div className="integrity-notice"><SparkIcon /><div><strong>这是编辑模式，不是学习模式</strong><p>AI 会直接改写全文，但不会覆盖原稿，也不会添加原稿中不存在的事实、数据或引用。请遵守课程的 AI 使用规定。</p></div></div>}</>}
-      {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={beginDraft} disabled={!canContinueSetup || isResolvingTopic}>{isResolvingTopic ? "正在理解你的写作方向……" : "继续填写初稿"} <ArrowIcon /></button></section>}
+  return <main className="workspace-shell"><header className="workspace-header"><Brand compact /><Progress stage={stage} helpMode={helpMode} /><div className="prototype-badge"><span /> English candidate</div></header><div className="workspace-body"><button className="back-button" type="button" onClick={goBack}><ArrowIcon back /> Back</button>
+    {stage === "setup" && <section className="flow-panel setup-panel"><div className="flow-heading"><p className="overline">Step 1 · Set your task</p><h1>{path === "practice" ? "Prepare a theme writing activity" : "How would you like AI to support you?"}</h1><p>{path === "practice" ? "Choose a topic context first. You decide the position and angle; the system uses the topic only to select relevant vocabulary." : "More direct support may be faster, but it also leaves fewer opportunities for you to think and revise independently."}</p></div>
+      {path === "practice" ? <div className="setup-columns"><fieldset className="choice-fieldset"><legend>Choose or describe a topic that interests you</legend><div className="topic-choices">{topics.map((item) => <button key={item.id} type="button" aria-pressed={topic === item.id} className={topic === item.id ? "active" : ""} onClick={() => selectTopic(item.id)}><span>{item.label}</span><small>{item.prompt}</small></button>)}</div>{topic === "custom" && <div className="custom-topic-fields"><label><span>Describe your direction <em>Required</em></span><textarea value={customTopic} maxLength={200} onChange={(event) => updateCustomTopic(event.target.value)} placeholder="For example: I want to discuss how short-video recommendations influence young people's tastes, choices and communities." /></label><label><span>Add the angle you want to explore <em>Optional</em></span><textarea value={customQuestion} maxLength={300} onChange={(event) => updateCustomQuestion(event.target.value)} placeholder="For example: I want to compare individual choice with platform influence." /></label><small>Use one to three sentences to describe any situation, relationship, experience or social issue. You do not need to name a formal topic. The system will match English target words without prescribing a question you must answer.</small></div>}</fieldset><fieldset className="choice-fieldset"><legend>Choose a level</legend><div className="level-choices">{levels.map((item) => <button key={item.id} type="button" aria-pressed={level === item.id} className={level === item.id ? "active" : ""} onClick={() => selectLevel(item.id)}><strong>{item.label}</strong><span>{item.count} target words</span><small>{item.description}</small></button>)}</div></fieldset></div> : <><fieldset className="choice-fieldset"><legend>Choose the level of support</legend><div className="help-grid">{helpModes.map((item, index) => <button key={item.id} type="button" aria-pressed={helpMode === item.id} className={`${helpMode === item.id ? "active" : ""} ${item.id === "rewrite" ? "editing-mode" : ""}`} onClick={() => setHelpMode(item.id)}><span className="mode-index">0{index + 1}</span><strong>{item.name}</strong><p>{item.description}</p><em>{item.learning}</em></button>)}</div></fieldset>{helpMode === "rewrite" && <div className="integrity-notice"><SparkIcon /><div><strong>This is editing mode, not learning mode</strong><p>AI will rewrite the full text without overwriting your draft or adding facts, data or citations that were not in it. Follow your course rules for AI use.</p></div></div>}</>}
+      {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={beginDraft} disabled={!canContinueSetup || isResolvingTopic}>{isResolvingTopic ? "Interpreting your writing direction…" : "Continue to your draft"} <ArrowIcon /></button></section>}
 
-    {stage === "draft" && <section className="flow-panel draft-panel"><div className="flow-heading compact-heading"><p className="overline">步骤 2 · 你的初稿</p><h1>{path === "practice" ? "围绕当前方向自由写作" : "粘贴你自己的英文初稿"}</h1><p>{path === "practice" ? `当前方向：${activeTopicLabel}，你可以自由确定文章观点。建议写 80–150 词，目标词要自然使用。` : "请删除姓名、学号和其他个人信息。原稿不会被 AI 自动覆盖。"}</p></div>
-      {path === "practice" && <div className="vocabulary-panel"><div className="panel-title-row"><div><span>本轮目标词</span><strong>已使用 {usedWords.size} / {words.length} · 建议至少 {Math.min(6, words.length)} 个</strong></div><button type="button" onClick={redrawWords}>重新抽取</button></div><div className="vocabulary-list">{words.map((item) => <button key={item.word} type="button" className={`${openWord === item.word ? "open" : ""} ${usedWords.has(item.word) ? "used" : ""}`} onClick={() => setOpenWord(openWord === item.word ? null : item.word)}><span className="vocabulary-term"><strong>{item.word}</strong><small>{item.definition}</small></span><span>{openWord === item.word ? "收起" : usedWords.has(item.word) ? "已使用 ✓" : "查看提示"}</span>{openWord === item.word && <div><p><b>中文：</b>{item.definition}</p><p><b>搭配：</b>{item.collocation}</p><p><b>例句：</b>{item.example}</p></div>}</button>)}</div></div>}
-      <label className="text-field draft-field"><span>英文初稿</span><textarea value={draft} readOnly={isGeneratingDemo} maxLength={path === "practice" ? 6000 : MAX_RAW_DRAFT_CHARACTERS} onChange={(event) => updateDraft(event.target.value)} placeholder="在这里输入或粘贴你的英文……" /><small className={(path === "practice" && draftWordCount >= 300) || (path === "revision" && draftNonWhitespaceCount >= 6000) ? "limit-reached" : ""}>{path === "practice" ? `${draftWordCount} / 300 词${draftWordCount >= 300 ? " · 已达到上限" : ""}` : `${draftWordCount} 词 · ${draftNonWhitespaceCount} / 6000 非空白字符${draftNonWhitespaceCount >= 6000 ? " · 已达到上限" : ""}`} · 内容仅用于本次反馈</small></label>
-      <div className="draft-tools"><button className="secondary-button" type="button" disabled={isGeneratingDemo || isLoading} onClick={fillDemoDraft}>{isGeneratingDemo ? "正在生成匹配本轮目标词的新稿……" : path === "practice" ? "填入匹配当前方向的演示初稿（含全部目标词）" : "填入演示初稿"}</button></div>
+    {stage === "draft" && <section className="flow-panel draft-panel"><div className="flow-heading compact-heading"><p className="overline">Step 2 · Your first draft</p><h1>{path === "practice" ? "Write freely within this direction" : "Paste your own English draft"}</h1><p>{path === "practice" ? `Current direction: ${activeTopicLabel}. You choose the position. Aim for 80–150 words and use the target words naturally.` : "Remove names, student numbers and other personal information. AI will not overwrite your original draft."}</p></div>
+      {path === "practice" && <div className="vocabulary-panel"><div className="panel-title-row"><div><span>Target words</span><strong>Used {usedWords.size} / {words.length} · Aim for at least {Math.min(6, words.length)}</strong></div><button type="button" onClick={redrawWords}>Draw again</button></div><div className="vocabulary-list">{words.map((item) => <button key={item.word} type="button" className={`${openWord === item.word ? "open" : ""} ${usedWords.has(item.word) ? "used" : ""}`} onClick={() => setOpenWord(openWord === item.word ? null : item.word)}><span className="vocabulary-term"><strong>{item.word}</strong></span><span>{openWord === item.word ? "Hide" : usedWords.has(item.word) ? "Used ✓" : "View hints"}</span>{openWord === item.word && <div><p><b>Collocation:</b>{item.collocation}</p><p><b>Example:</b>{item.example}</p></div>}</button>)}</div></div>}
+      <label className="text-field draft-field"><span>English draft</span><textarea value={draft} readOnly={isGeneratingDemo} maxLength={path === "practice" ? 6000 : MAX_RAW_DRAFT_CHARACTERS} onChange={(event) => updateDraft(event.target.value)} placeholder="Type or paste your English here…" /><small className={(path === "practice" && draftWordCount >= 300) || (path === "revision" && draftNonWhitespaceCount >= 6000) ? "limit-reached" : ""}>{path === "practice" ? `${draftWordCount} / 300 words${draftWordCount >= 300 ? " · Limit reached" : ""}` : `${draftWordCount} words · ${draftNonWhitespaceCount} / 6000 non-whitespace characters${draftNonWhitespaceCount >= 6000 ? " · Limit reached" : ""}`} · Used only for this feedback session</small></label>
+      <div className="draft-tools"><button className="secondary-button" type="button" disabled={isGeneratingDemo || isLoading} onClick={fillDemoDraft}>{isGeneratingDemo ? "Generating a new draft with this set of target words…" : path === "practice" ? "Add a demo draft for this direction (uses all target words)" : "Add a demo draft"}</button></div>
       {demoNotice && <p className="demo-status" role="status">{demoNotice}</p>}
-      {helpMode !== "rewrite" && <div className="self-check"><div><span className="mini-step">AI 分析前</span><h2>先对初稿进行简要自我评估</h2><p>你的判断会与 AI 诊断一起保留，帮助你比较自我评估与外部反馈，并观察修改能力的进步。点击上方演示按钮，也会填入匹配主题的示范内容。</p></div><label><span>请概括这段文字的核心论点。</span><input value={selfCheck.mainPoint} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, mainPoint: event.target.value })} placeholder="可用中文或英文简要概括" /></label><label><span>你认为初稿中表达最清晰、最有效的是哪一句？</span><input value={selfCheck.strongest} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, strongest: event.target.value })} placeholder="选填：可直接复制原稿中的句子" /></label><label><span>你认为当前初稿最需要改进的方面是什么？</span><select value={selfCheck.weakness} onChange={(event) => setSelfCheck({ ...selfCheck, weakness: event.target.value })}><option value="" disabled>请选择一项自我判断</option><option>中心论点尚未充分聚焦或明确</option><option>论证展开不足，缺少充分的理由或证据</option><option>篇章结构松散，段落之间的逻辑衔接不足</option><option>学术语域不够恰当，存在较多口语化表达</option><option>词汇范围有限，部分用词笼统或重复</option><option>语言准确性不足，存在较多拼写、语法或时态问题</option><option>多个方面均需要改进，希望进行综合诊断</option><option>尚不确定，希望通过 AI 诊断进一步确认</option></select></label><label><span>本轮希望 AI 重点提供哪一方面的支持？</span><select value={goal} onChange={(event) => { setGoal(event.target.value); setSelfCheck({ ...selfCheck, help: event.target.value }); }}><option>澄清并聚焦中心论点</option><option>增强篇章结构与段落间的逻辑衔接</option><option>提升学术语域与措辞的准确性</option><option>深化论证并完善证据阐释</option><option>检查拼写、语法与时态的准确性</option><option>对初稿进行全面综合诊断</option></select></label></div>}
-      {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={requestFeedback} disabled={isLoading || isGeneratingDemo}>{isLoading ? "正在分析文章问题……" : helpMode === "rewrite" ? "生成完整学术改写" : "分析并定位文章问题"}<ArrowIcon /></button></section>}
+      {helpMode !== "rewrite" && <div className="self-check"><div><span className="mini-step">Before AI analysis</span><h2>Briefly assess your first draft</h2><p>Your assessment will be kept alongside the AI diagnosis so you can compare your judgement with external feedback and observe how your revision skills develop. The demo button above also fills in a sample response.</p></div><label><span>Summarise the central claim of this text.</span><input value={selfCheck.mainPoint} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, mainPoint: event.target.value })} placeholder="Write a brief summary" /></label><label><span>Which sentence is currently the clearest or most effective?</span><input value={selfCheck.strongest} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, strongest: event.target.value })} placeholder="Optional: paste a sentence from your draft" /></label><label><span>What most needs improvement in this draft?</span><select value={selfCheck.weakness} onChange={(event) => setSelfCheck({ ...selfCheck, weakness: event.target.value })}><option value="" disabled>Choose one assessment</option><option>The central claim is not sufficiently focused or clear</option><option>The argument needs stronger reasons or evidence</option><option>The structure is loose or connections between paragraphs are unclear</option><option>The academic register is inappropriate or too conversational</option><option>The vocabulary range is limited, vague or repetitive</option><option>Language accuracy needs work, including spelling, grammar or tense</option><option>Several areas need improvement; I would like a comprehensive diagnosis</option><option>I am not sure yet and would like AI feedback to help me decide</option></select></label><label><span>What should AI focus on in this session?</span><select value={goal} onChange={(event) => { setGoal(event.target.value); setSelfCheck({ ...selfCheck, help: event.target.value }); }}><option>Clarify and focus the central claim</option><option>Strengthen structure and logical connections between paragraphs</option><option>Improve academic register and precision</option><option>Develop the argument and explain evidence more fully</option><option>Check spelling, grammar and tense</option><option>Provide a comprehensive diagnosis</option></select></label></div>}
+      {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={requestFeedback} disabled={isLoading || isGeneratingDemo}>{isLoading ? "Analysing the draft…" : helpMode === "rewrite" ? "Generate a full academic rewrite" : "Analyse and locate issues"}<ArrowIcon /></button></section>}
 
-    {stage === "feedback" && response && <section className="flow-panel feedback-panel"><div className="flow-heading compact-heading"><p className="overline">步骤 3 · 文章整体诊断</p><h1>这篇文章需要修改什么？</h1><p>{response.summary}</p></div><ProviderBadge response={response} />{response.feedback.length === 0 ? <><div className="integrity-notice"><CheckIcon /><div><strong>暂未发现可可靠定位的问题</strong><p>这不代表文章绝对完美。你可以返回初稿继续完善内容，也可以结束本轮练习；系统不会为了凑数量虚构反馈。</p></div></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={() => setStage("draft")}>返回初稿继续编辑</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>完成并返回首页 <ArrowIcon /></button></div></> : <><div className="feedback-grid">{response.feedback.map((item, index) => <article className="feedback-card" key={`${item.category}-${index}`}><div className="feedback-card-top"><span>问题 {index + 1}</span><em>AI 判断：{item.confidence}</em></div><h2>{item.category}</h2><blockquote>问题位置：{item.quote}</blockquote><h3>建议修改方向</h3><p>{item.why}</p><h3>正确用法／修改方法</h3><p className="correction-copy">{item.correction || "请根据上面的诊断，用自己的语言完成修改。"}</p>{helpMode === "model" && item.suggestion && <details className="local-example"><summary>查看这个问题的局部修改示例</summary><div><span>仅供参考，不是整篇替代稿</span><p>{item.suggestion}</p></div></details>}</article>)}</div><div className="integrity-notice"><SparkIcon /><div><strong>接下来由你完成全文修改</strong><p>{helpMode === "model" ? "局部示例只帮助你理解某一个问题，不会替你完成整篇文章。提交第二稿后，系统会保留三个版本供比较。" : "请根据上面的诊断修改文章。提交后，系统会生成一版完成这些修改的规范学术英语版本，并保留你的原稿与第二稿供比较。"}</p></div></div><button className="primary-button wide-action" type="button" onClick={() => setStage("revise")}>查看标记并开始自己修改 <ArrowIcon /></button></>}</section>}
+    {stage === "feedback" && response && <section className="flow-panel feedback-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Overall diagnosis</p><h1>What should you revise?</h1><p>{displaySummary(response)}</p></div><ProviderBadge response={response} />{response.feedback.length === 0 ? <><div className="integrity-notice"><CheckIcon /><div><strong>No reliably locatable issues found</strong><p>This does not guarantee that the text is perfect. You can return to refine the draft or finish this session; the system will not invent feedback to reach a quota.</p></div></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={() => setStage("draft")}>Return to the draft</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></> : <><div className="feedback-grid">{response.feedback.map((item, index) => <article className="feedback-card" key={`${item.category}-${index}`}><div className="feedback-card-top"><span>Issue {index + 1}</span><em>AI confidence: {confidenceLabels[item.confidence]}</em></div><h2>{displayCategory(item.category)}</h2><blockquote>Location: {item.quote}</blockquote><h3>Why this needs attention</h3><p>{displayWhy(item)}</p><h3>How to revise</h3><p className="correction-copy">{displayCorrection(item)}</p>{helpMode === "model" && item.suggestion && <details className="local-example"><summary>View a local revision example</summary><div><span>For reference only, not a replacement draft</span><p>{item.suggestion}</p></div></details>}</article>)}</div><div className="integrity-notice"><SparkIcon /><div><strong>Now revise the full text yourself</strong><p>{helpMode === "model" ? "Local examples only clarify individual issues; they do not complete the whole text for you. After you submit a second draft, all three versions will be kept for comparison." : "Revise the draft using the diagnosis above. After submission, the system will generate an academic version that addresses remaining issues and preserve your first and second drafts for comparison."}</p></div></div><button className="primary-button wide-action" type="button" onClick={() => setStage("revise")}>View highlights and start revising <ArrowIcon /></button></>}</section>}
 
-    {stage === "revise" && response && helpMode === "rewrite" && <section className="flow-panel revise-panel direct-rewrite-panel"><div className="flow-heading compact-heading"><p className="overline">步骤 3 · 直接完整改写</p><h1>原稿与规范学术版本</h1><p>AI 已完成语言纠正与学术化表达。请核对改写是否保留了你的原意、事实和立场。</p></div><div className="comparison-grid"><div className="version-pane locked"><div><span>原稿</span><strong>{draftWordCount} 词</strong></div><aside className="draft-highlight-legend"><i />红色下划线表示已修改的位置</aside><p><HighlightedDraft text={draft} feedback={response.feedback} /></p></div><article className="version-pane final direct-result"><div><span>完整学术改写</span><strong>{response.modelRevision.trim().split(/\s+/).filter(Boolean).length} 词</strong></div><p>{response.modelRevision}</p></article></div><div className="ai-record editing-record"><div><SparkIcon /><span>编辑模式</span></div><p>此版本由 AI 直接生成，学习参与度最低。请根据课程规定说明 AI 的使用方式，并自行核对内容准确性。</p></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={async () => { await navigator.clipboard.writeText(response.modelRevision); setRecordCopied(true); }}>{recordCopied ? "改写已复制" : "复制完整改写"}</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>完成并返回首页 <ArrowIcon /></button></div></section>}
+    {stage === "revise" && response && helpMode === "rewrite" && <section className="flow-panel revise-panel direct-rewrite-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Full rewrite</p><h1>Original draft and academic version</h1><p>AI has corrected the language and adjusted the academic register. Check that the revision preserves your intended meaning, facts and position.</p></div><div className="comparison-grid"><div className="version-pane locked"><div><span>Original draft</span><strong>{draftWordCount} words</strong></div><aside className="draft-highlight-legend"><i />Red underlining shows revised locations</aside><p><HighlightedDraft text={draft} feedback={response.feedback} /></p></div><article className="version-pane final direct-result"><div><span>Full academic rewrite</span><strong>{response.modelRevision.trim().split(/\s+/).filter(Boolean).length} words</strong></div><p>{response.modelRevision}</p></article></div><div className="ai-record editing-record"><div><SparkIcon /><span>Editing mode</span></div><p>This version was generated directly by AI and involves the least learner participation. Disclose AI use according to your course rules and verify the content yourself.</p></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={async () => { await navigator.clipboard.writeText(response.modelRevision); setRecordCopied(true); }}>{recordCopied ? "Rewrite copied" : "Copy full rewrite"}</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></section>}
 
     {stage === "revise" && response && helpMode !== "rewrite" && <section className="flow-panel revise-panel">
-      <div className="flow-heading compact-heading"><p className="overline">步骤 4 · 自己修改</p><h1>把文章问题改成你自己的第二稿</h1><p>左侧原稿用红色下划线标出反馈对应的位置，右侧由你完成修改。{helpMode === "model" ? "需要时可返回上一页查看局部示例。" : "系统不会提前替你改写。"}</p></div>
+      <div className="flow-heading compact-heading"><p className="overline">Step 4 · Revise it yourself</p><h1>Turn the feedback into your own second draft</h1><p>The original draft on the left highlights feedback locations in red; complete your revision on the right. {helpMode === "model" ? "Return to the previous page if you need to review a local example." : "The system will not rewrite the draft in advance."}</p></div>
       <ProviderBadge response={response} />
-      <div className="comparison-grid revision-comparison"><div className="version-pane locked interactive-original"><div><span>带问题定位的原稿</span><strong>{draftWordCount} 词</strong></div><div className="issue-navigator" aria-label="逐项查看文章问题"><button type="button" onClick={() => showIssue((activeIssue ?? 0) - 1, true)} aria-label="查看上一个问题"><ArrowIcon back /></button><button type="button" className="issue-position" onClick={() => showIssue(activeIssue ?? 0, true)}>{activeIssue === null ? `查看全部 ${response.feedback.length} 项问题` : `问题 ${activeIssue + 1} / ${response.feedback.length} · ${response.feedback[activeIssue]?.category}`}</button><button type="button" onClick={() => showIssue((activeIssue ?? -1) + 1, true)} aria-label="查看下一个问题"><ArrowIcon /></button></div><aside className="draft-highlight-legend"><i />悬停查看提示；点击可固定，修改右侧时不会消失</aside><p className="interactive-draft-copy"><InteractiveHighlightedDraft text={draft} feedback={response.feedback} activeIssue={activeIssue} pinnedIssue={pinnedIssue} onShowIssue={setActiveIssue} onPinIssue={(index) => { if (pinnedIssue === index) dismissIssue(); else { setActiveIssue(index); setPinnedIssue(index); } }} onDismiss={dismissIssue} issueRefs={issueRefs} /></p></div><label className="version-pane editable"><div><span>你的第二稿</span><strong>{path === "practice" ? `${revisedWordCount} / 300 词` : `${revisedWordCount} 词 · ${revisedNonWhitespaceCount} / 6000 非空白字符`}</strong></div><textarea value={revisedDraft} maxLength={path === "practice" ? 6000 : MAX_RAW_DRAFT_CHARACTERS} onChange={(event) => updateRevisedDraft(event.target.value)} aria-label="修改后的英文文本" /></label></div>
+      <div className="comparison-grid revision-comparison"><div className="version-pane locked interactive-original"><div><span>Original draft with issue locations</span><strong>{draftWordCount} words</strong></div><div className="issue-navigator" aria-label="Review each issue"><button type="button" onClick={() => showIssue((activeIssue ?? 0) - 1, true)} aria-label="Previous issue"><ArrowIcon back /></button><button type="button" className="issue-position" onClick={() => showIssue(activeIssue ?? 0, true)}>{activeIssue === null ? `View all ${response.feedback.length} issues` : `Issue ${activeIssue + 1} / ${response.feedback.length} · ${displayCategory(response.feedback[activeIssue]?.category || "")}`}</button><button type="button" onClick={() => showIssue((activeIssue ?? -1) + 1, true)} aria-label="Next issue"><ArrowIcon /></button></div><aside className="draft-highlight-legend"><i />Hover to view guidance; click to pin it while editing</aside><p className="interactive-draft-copy"><InteractiveHighlightedDraft text={draft} feedback={response.feedback} activeIssue={activeIssue} pinnedIssue={pinnedIssue} onShowIssue={setActiveIssue} onPinIssue={(index) => { if (pinnedIssue === index) dismissIssue(); else { setActiveIssue(index); setPinnedIssue(index); } }} onDismiss={dismissIssue} issueRefs={issueRefs} /></p></div><label className="version-pane editable"><div><span>Your second draft</span><strong>{path === "practice" ? `${revisedWordCount} / 300 words` : `${revisedWordCount} words · ${revisedNonWhitespaceCount} / 6000 non-whitespace characters`}</strong></div><textarea value={revisedDraft} maxLength={path === "practice" ? 6000 : MAX_RAW_DRAFT_CHARACTERS} onChange={(event) => updateRevisedDraft(event.target.value)} aria-label="Revised English text" /></label></div>
       {revisionError && <p className="error-message" role="alert">{revisionError}</p>}
-      <button className="primary-button wide-action" type="button" disabled={isReanalyzing || countNonWhitespaceCharacters(revisedDraft) < 20} onClick={reanalyzeSecondDraft}>{isReanalyzing ? "正在重新分析第二稿……" : "提交第二稿并重新分析"} <ArrowIcon /></button>
-      <p className="second-check-note">系统会重新检查第二稿中仍存在的问题，并以第二稿为基础生成最终规范版本。</p>
+      <button className="primary-button wide-action" type="button" disabled={isReanalyzing || countNonWhitespaceCharacters(revisedDraft) < 20} onClick={reanalyzeSecondDraft}>{isReanalyzing ? "Reanalysing the second draft…" : "Submit and reanalyse the second draft"} <ArrowIcon /></button>
+      <p className="second-check-note">The system will recheck issues that remain and generate a final academic version based on your second draft.</p>
     </section>}
 
     {stage === "reflect" && response && revisionResponse && <section className="flow-panel reflection-panel">
       <div className="completion-mark"><CheckIcon /></div>
-      <div className="flow-heading centered"><p className="overline">步骤 5 · 第二稿复检与最终版本</p><h1>AI 已重新分析你的第二稿</h1><p>最终版本以你的第二稿为基础，只处理复检后仍然存在的问题，不会退回第一次分析时预先生成的文章。</p></div>
+      <div className="flow-heading centered"><p className="overline">Step 5 · Recheck and final version</p><h1>AI has reanalysed your second draft</h1><p>The final version is based on your second draft and addresses only the issues that remain after rechecking. It does not revert to a version generated during the first analysis.</p></div>
       <ProviderBadge response={revisionResponse} />
       <div className={`revision-audit ${revisionResponse.feedback.length === 0 ? "clear" : "remaining"}`}>
         {revisionResponse.revisionComparison ? <div className="revision-audit-grid">
-          <div><span>原稿首次诊断</span><strong>{revisionResponse.revisionComparison.initialCount}</strong><small>项</small></div>
-          <div className="resolved"><span>本轮未再检出</span><strong>{revisionResponse.revisionComparison.resolved.length}</strong><small>项</small></div>
-          <div><span>原问题仍存在</span><strong>{revisionResponse.revisionComparison.remainingCount}</strong><small>项</small></div>
-          <div><span>修改位置仍需注意</span><strong>{revisionResponse.revisionComparison.changedCount}</strong><small>项</small></div>
-          <div><span>复检补充发现</span><strong>{revisionResponse.revisionComparison.supplementalCount}</strong><small>项</small></div>
-        </div> : <div className="revision-audit-grid legacy"><div><span>原稿首次诊断</span><strong>{response.feedback.length}</strong><small>项</small></div><div><span>第二稿复检</span><strong>{revisionResponse.feedback.length}</strong><small>项</small></div></div>}
-        <p>{revisionResponse.feedback.length === 0 ? "本轮独立复检未发现可可靠定位的问题；最终版本仍需由你核对原意和事实。" : "第二稿已按与初稿相同的标准独立检测；下方标签说明问题来自原问题、修改位置，还是复检补充发现。"}</p>
+          <div><span>Initial diagnosis</span><strong>{revisionResponse.revisionComparison.initialCount}</strong><small>items</small></div>
+          <div className="resolved"><span>Not detected again</span><strong>{revisionResponse.revisionComparison.resolved.length}</strong><small>items</small></div>
+          <div><span>Original issues remaining</span><strong>{revisionResponse.revisionComparison.remainingCount}</strong><small>items</small></div>
+          <div><span>Revised locations needing attention</span><strong>{revisionResponse.revisionComparison.changedCount}</strong><small>items</small></div>
+          <div><span>Additional findings</span><strong>{revisionResponse.revisionComparison.supplementalCount}</strong><small>items</small></div>
+        </div> : <div className="revision-audit-grid legacy"><div><span>Initial diagnosis</span><strong>{response.feedback.length}</strong><small>items</small></div><div><span>Second-draft review</span><strong>{revisionResponse.feedback.length}</strong><small>items</small></div></div>}
+        <p>{revisionResponse.feedback.length === 0 ? "The independent recheck found no reliably locatable issues. You still need to verify the intended meaning and facts in the final version." : "The second draft was checked independently using the same standard. Labels below show whether an item is an original issue, a revised location needing attention or an additional finding."}</p>
       </div>
-      {revisionResponse.revisionComparison?.resolved.length ? <div className="resolved-issue-list"><h2>本轮未再检出的原问题</h2>{revisionResponse.revisionComparison.resolved.map((item, index) => <span key={`${item.category}-${item.quote}-${index}`}><CheckIcon />{item.category}：{item.quote}</span>)}</div> : null}
-      {revisionResponse.feedback.length > 0 && <div className="revision-review-list"><h2>第二稿仍需注意的问题</h2>{revisionResponse.feedback.map((item, index) => <article key={`${item.category}-${index}`}><div className="revision-issue-title"><strong>{index + 1}. {item.category}</strong>{item.revisionStatus && <span className={`revision-status ${item.revisionStatus}`}>{item.revisionStatus === "remaining" ? "原问题仍存在" : item.revisionStatus === "changed" ? "修改位置仍需注意" : "复检补充发现"}</span>}</div><blockquote>{item.quote}</blockquote><p>{item.correction}</p></article>)}</div>}
+      {revisionResponse.revisionComparison?.resolved.length ? <div className="resolved-issue-list"><h2>Original issues not detected again</h2>{revisionResponse.revisionComparison.resolved.map((item, index) => <span key={`${item.category}-${item.quote}-${index}`}><CheckIcon />{displayCategory(item.category)}: {item.quote}</span>)}</div> : null}
+      {revisionResponse.feedback.length > 0 && <div className="revision-review-list"><h2>Issues that still need attention</h2>{revisionResponse.feedback.map((item, index) => <article key={`${item.category}-${index}`}><div className="revision-issue-title"><strong>{index + 1}. {displayCategory(item.category)}</strong>{item.revisionStatus && <span className={`revision-status ${item.revisionStatus}`}>{item.revisionStatus === "remaining" ? "Original issue remains" : item.revisionStatus === "changed" ? "Revised location needs attention" : "Additional finding"}</span>}</div><blockquote>{item.quote}</blockquote><p>{displayCorrection(item)}</p></article>)}</div>}
       <div className="final-version-stack">
-        <article className="version-pane locked"><div><span>原稿</span><strong>{draftWordCount} 词</strong></div><p>{draft}</p></article>
-        <article className="version-pane locked"><div><span>你的第二稿</span><strong>{revisedWordCount} 词</strong></div>{revisionResponse.feedback.length > 0 && <aside className="draft-highlight-legend"><i />红色下划线表示第二稿复检后仍存在的问题</aside>}<p><HighlightedDraft text={revisedDraft} feedback={revisionResponse.feedback} /></p></article>
-        <article className="version-pane final"><div><span>基于第二稿生成的最终规范版本</span><strong>{finalDraft.trim().split(/\s+/).filter(Boolean).length} 词</strong></div><p>{finalDraft}</p></article>
+        <article className="version-pane locked"><div><span>Original draft</span><strong>{draftWordCount} words</strong></div><p>{draft}</p></article>
+        <article className="version-pane locked"><div><span>Your second draft</span><strong>{revisedWordCount} words</strong></div>{revisionResponse.feedback.length > 0 && <aside className="draft-highlight-legend"><i />Red underlining shows issues that remain after rechecking</aside>}<p><HighlightedDraft text={revisedDraft} feedback={revisionResponse.feedback} /></p></article>
+        <article className="version-pane final"><div><span>Final academic version based on your second draft</span><strong>{finalDraft.trim().split(/\s+/).filter(Boolean).length} words</strong></div><p>{finalDraft}</p></article>
       </div>
-      <div className="reflection-fields"><label><span>学习反思</span><strong>比较原稿、第二稿与最终版本，这一次你学到的最重要修改原则是什么？</strong><textarea value={reflection} maxLength={1000} onChange={(event) => setReflection(event.target.value)} placeholder="可以用中文或英文回答……" /></label></div>
-      <div className="ai-record"><div><SparkIcon /><span>AI 贡献记录</span></div><p>AI 首先诊断原稿；学习者独立完成第二稿；AI 随后重新分析第二稿并处理仍存在的问题。最终文本仍需由学习者核对事实、立场与课程规定。</p></div>
-      <div className="finish-actions"><button className="secondary-button" type="button" disabled={!reflection.trim()} onClick={async () => { const comparison = revisionResponse.revisionComparison; await navigator.clipboard.writeText(`ThinkRevise AI 学习记录\n${path === "practice" ? `练习主题：${activeTopicLabel}\n` : ""}初稿自我评估：${selfCheck.weakness}\n本轮目标：${goal}\n原稿首次诊断：${response.feedback.length} 项\n${comparison ? `本轮未再检出：${comparison.resolved.length} 项\n原问题仍存在：${comparison.remainingCount} 项\n修改位置仍需注意：${comparison.changedCount} 项\n复检补充发现：${comparison.supplementalCount} 项` : `第二稿复检：${revisionResponse.feedback.length} 项仍需注意`}\n原稿：${draft}\n第二稿：${revisedDraft}\n最终规范版本：${finalDraft}\n反思：${reflection}`); setRecordCopied(true); }}>{recordCopied ? "学习记录已复制" : "复制学习记录"}</button><button className="primary-button" type="button" disabled={!reflection.trim()} onClick={() => { resetLearningWork(); setStage("home"); }}>完成并返回首页 <ArrowIcon /></button></div>
+      <div className="reflection-fields"><label><span>Learning reflection</span><strong>After comparing the original, second and final versions, what is the most important revision principle you learned?</strong><textarea value={reflection} maxLength={1000} onChange={(event) => setReflection(event.target.value)} placeholder="Write your reflection here…" /></label></div>
+      <div className="ai-record"><div><SparkIcon /><span>Record of AI contribution</span></div><p>AI first diagnosed the original draft; the learner independently completed a second draft; AI then reanalysed it and addressed remaining issues. The learner must still verify the facts, position and course requirements.</p></div>
+      <div className="finish-actions"><button className="secondary-button" type="button" disabled={!reflection.trim()} onClick={async () => { const comparison = revisionResponse.revisionComparison; await navigator.clipboard.writeText(`ThinkRevise AI learning record\n${path === "practice" ? `Practice topic: ${activeTopicLabel}\n` : ""}Initial self-assessment: ${selfCheck.weakness}\nSession goal: ${goal}\nInitial diagnosis: ${response.feedback.length} items\n${comparison ? `Not detected again: ${comparison.resolved.length} items\nOriginal issues remaining: ${comparison.remainingCount} items\nRevised locations needing attention: ${comparison.changedCount} items\nAdditional findings: ${comparison.supplementalCount} items` : `Second-draft review: ${revisionResponse.feedback.length} items still need attention`}\nOriginal draft: ${draft}\nSecond draft: ${revisedDraft}\nFinal academic version: ${finalDraft}\nReflection: ${reflection}`); setRecordCopied(true); }}>{recordCopied ? "Learning record copied" : "Copy learning record"}</button><button className="primary-button" type="button" disabled={!reflection.trim()} onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div>
     </section>}
   </div></main>;
 }
 
 function ProviderBadge({ response }: { response: CoachResponse }) {
-  const languageCount = response.feedback.filter(item => item.category.startsWith("语言")).length;
-  return <><div className={`provider-status ${response.provider}`}><span /><strong>{response.provider === "openai" ? "实时 AI 反馈" : "演示反馈模式"}</strong><p>{response.fallbackNotice || (response.provider === "openai" ? "AI 判断可能出错，请由学习者核对。" : "无需 API 密钥，适合现场试用与故障备用。")}</p></div>
-    <p className="second-check-note">本轮反馈分为语言检查 {languageCount} 项、学术与表达建议 {response.feedback.length - languageCount} 项。学术建议不是已证实的语法错误；是否采纳取决于原意、证据和写作要求。下方总数包含两类反馈，不代表错误总数。</p></>;
+  const languageCount = response.feedback.filter(item => item.category.startsWith("语言") || item.category.startsWith("Language")).length;
+  return <><div className={`provider-status ${response.provider}`}><span /><strong>{response.provider === "openai" ? "Live AI feedback" : "Demo feedback mode"}</strong><p>{displayFallbackNotice(response)}</p></div>
+    <p className="second-check-note">This session contains {languageCount} language checks and {response.feedback.length - languageCount} academic or expression suggestions. Academic suggestions are not confirmed grammar errors; whether to accept them depends on your intended meaning, evidence and writing requirements. The total below combines both kinds of feedback and is not an error count.</p></>;
 }

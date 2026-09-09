@@ -1,5 +1,5 @@
 {
-  "name": "thinkrevise-ai-chinese",
+  "name": "thinkrevise-ai",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
@@ -10,7 +10,7 @@
     "lint": "eslint",
     "check:data": "NODE_NO_WARNINGS=1 node --experimental-strip-types scripts/check-learning-data.mjs",
     "check:limits": "NODE_NO_WARNINGS=1 node --experimental-strip-types scripts/check-text-limits.mjs",
-    "check:copy": "node scripts/check-chinese-ui.mjs",
+    "check:copy": "node scripts/check-english-ui.mjs",
     "check:safeguards": "node scripts/check-safeguards.mjs && node scripts/check-revision-consistency.mjs",
     "check:security": "NODE_NO_WARNINGS=1 node --experimental-strip-types scripts/check-security-controls.mjs",
     "check:release": "node scripts/check-release-readiness.mjs",

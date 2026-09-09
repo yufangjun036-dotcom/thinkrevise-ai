@@ -102,20 +102,20 @@ export function acquireAiRequest(request: Request, route: RouteKind) {
   state.visitors.set(key, visitor);
 
   if (visitor.active >= limits.perVisitorConcurrent) {
-    return { ok: false as const, response: securityResponse("上一项 AI 请求仍在处理中，请等待完成后再试。", 429, 2) };
+    return { ok: false as const, response: securityResponse("Another AI request is still running. Wait for it to finish before trying again.", 429, 2) };
   }
   if (state.globalActive >= limits.globalConcurrent) {
-    return { ok: false as const, response: securityResponse("当前使用人数较多，请稍后重试；你的内容不会丢失。", 503, 5) };
+    return { ok: false as const, response: securityResponse("The service is busy. Please try again shortly; your content will not be lost.", 503, 5) };
   }
   if (visitor.minuteCount >= limits.perMinute) {
     const retryAfter = Math.max(1, Math.ceil((visitor.minuteStartedAt + MINUTE_MS - now) / 1000));
-    return { ok: false as const, response: securityResponse("操作过于频繁，请稍后再试；你的内容仍保留在页面中。", 429, retryAfter) };
+    return { ok: false as const, response: securityResponse("Too many requests were made in a short time. Please try again shortly; your content remains on the page.", 429, retryAfter) };
   }
   if (visitor.dayCount >= limits.perDay) {
-    return { ok: false as const, response: securityResponse("今天的 AI 使用次数已达到当前体验上限，请明天再试。", 429, 3600) };
+    return { ok: false as const, response: securityResponse("You have reached today's AI-use limit for this experience. Please try again tomorrow.", 429, 3600) };
   }
   if (state.globalDayCount >= limits.globalPerDay) {
-    return { ok: false as const, response: securityResponse("今日公共 AI 额度已用完；你仍可保留和编辑文章，稍后再试。", 503, 3600) };
+    return { ok: false as const, response: securityResponse("Today's shared AI allowance has been used. You can keep editing your draft and try again later.", 503, 3600) };
   }
 
   visitor.minuteCount += 1;

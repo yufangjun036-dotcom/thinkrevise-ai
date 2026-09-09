@@ -15,7 +15,7 @@ for (const topic of ["education-ai", "university", "technology", "environment"])
   const topicWords = vocabulary.filter((item) => item.topics.includes(topic));
   assert.ok(new Set(topicWords.map((item) => item.word)).size >= 200, `${topic} needs at least 200 unique curated words`);
   assert.ok(topicWords.every((item) => !["the", "a", "an", "happy"].includes(item.word)), `${topic} contains a generic prompt word`);
-  assert.ok(topicWords.every((item) => item.definition && !item.definition.includes("相关学术概念") && item.definition !== "中文释义暂缺"), `${topic} contains a missing or placeholder Chinese translation`);
+  assert.ok(topicWords.every((item) => item.collocation && item.example), `${topic} contains a target word without an English collocation or example`);
 }
 for (const [topic, draft] of Object.entries(demoDrafts)) {
   const wordCount = draft.trim().split(/\s+/).length;
