@@ -154,10 +154,12 @@ function findLanguageIssues(draft: string): FeedbackItem[] {
     // objective errors, return one complete correction instead of fixing only
     // the first verb and leaving the rest of the span ungrammatical.
     [/\bmany student use AI tool\b/i, "many students use AI tools", "名词单复数", "many 后使用复数 students；泛指多种 AI 工具时使用复数 tools。"],
+    [/\bfor university assignment\b/i, "for university assignments", "冠词与名词形式", "assignment 是单数可数名词；泛指大学作业时使用复数 assignments，若指一项作业则需要冠词 a。"],
     [/\bprepare presentation for class\b/i, "prepare presentations for class", "冠词与名词形式", "presentation 是单数可数名词；泛指课堂展示时使用复数 presentations，若指一次展示则需要冠词 a。"],
     [/\bI try AI to make slide content last week\b/i, "I tried AI to create slide content last week", "时态与动词形式", "last week 表示过去时间，谓语应使用过去式 tried；slide content 本身可以作为不可数名词短语。"],
     [/\bIt help me collect example and organize structure fast\b/i, "It helped me collect examples and organize the structure quickly", "时态、名词形式与词形选择", "该句承接 last week 的过去经历，应使用 helped；泛指例子使用复数 examples；修饰动作应使用副词 quickly。"],
     [/\bthe content not match our assignment brief\b/i, "the content does not match our assignment brief", "句子完整性与主谓一致", "否定谓语需要助动词 does not，助动词后使用原形 match。"],
+    [/\bour course requirement\b/i, "our course requirements", "名词单复数", "泛指课程的多项要求时使用复数 requirements；若只指一项具体要求，应在上下文中明确限定。"],
     [/\bAI sometimes miss the course requirement\b/i, "AI sometimes misses the course requirement", "主谓一致", "AI 是第三人称单数主语，一般现在时谓语应使用 misses。"],
     [/\bmany learner copy AI output directly and skip critical check\b/i, "many learners copy AI output directly and skip critical checks", "名词单复数", "many 后使用复数 learners；泛指核查步骤时使用复数 checks。"],
     [/\bpractice analysis skill\b/i, "practice analysis skills", "名词单复数", "泛指多方面的分析能力时使用复数 skills。"],
@@ -520,13 +522,30 @@ function buildUnverifiableResearchClaimFeedback(draft: string): FeedbackItem | n
   const groupSeven = draft.match(/I read a paper online:\s*[^.!?]*\b\d+(?:\.\d+)?%[^.!?]*[.!?]\s*But the paper[^.!?]*(?:sample size|reference)[^.!?]*[.!?]?/i);
   const groupTen = draft.match(/A famous research[^.!?]*\b\d+(?:\.\d+)?%[^.!?]*[.!?]\s*The researcher[^.!?]*\b\d+\s+student[^.!?]*cannot find the original paper[^.!?]*[.!?]?/i);
   const finalBlind = draft.match(/A famous 2024 study[^.!?]*\b\d+(?:\.\d+)?\s*percent[^.!?]*[.!?]\s*The research[^.!?]*\b\d+\s+learners?[^.!?]*[.!?]\s*I found this result on a blog, but no original paper or author reference is available[.!?]?/i);
-  const match = groupSeven ?? groupTen ?? finalBlind;
+  const genericUnverifiable = draft.match(/(?:A\s+(?:famous|widely cited)\s+(?:\d{4}\s+)?study|I\s+(?:read|found)\s+(?:a\s+)?paper)[^.!?]*(?:\d+(?:\.\d+)?\s*(?:%|percent)|\d{3,}\s+(?:students?|learners?))[^.!?]*[.!?]\s*[^.!?]*(?:cannot|can't|can not|could not)\s+(?:locate|find|verify)[^.!?]*(?:original\s+(?:paper|study|source)|authors?|reference|research method)[^.!?]*[.!?]?/i);
+  const match = groupSeven ?? groupTen ?? finalBlind ?? genericUnverifiable;
   if (!match) return null;
   return {
     category: "学术建议 · 论证与证据",
     quote: match[0].trim(),
     why: "文中使用了具体比例或样本规模作为证据，却同时说明原始论文、样本信息或参考文献无法核实。这属于需要优先处理的证据可追溯性问题。",
     correction: "在保留该数据前核对并提供可追溯的原始文献、样本量和研究条件；如果无法核实，应删除该具体数据，不要用它支撑结论。",
+    question: "",
+    hints: [],
+    suggestion: "",
+    confidence: "高",
+  };
+}
+
+function buildUnsupportedUniversalPolicyFeedback(draft: string): FeedbackItem | null {
+  const match = draft.match(/(?:^|(?<=[.!?])\s*)(?:Therefore|Thus|Consequently),?\s+(?:every|all)\s+(?:universit(?:y|ies)|schools?|colleges?)\b[^.!?]*\b(?:should|must)\b[^.!?]*\b(?:immediately|replace|buy|adopt)\b[^.!?]*[.!?]?/i);
+  if (!match) return null;
+  const quote = match[0].trim();
+  return {
+    category: "学术建议 · 论证与证据",
+    quote,
+    why: "该结论把有限或个人层面的观察直接推广为适用于所有院校的立即政策，并提出替代现有教学，现有证据不足以支持如此宽泛且强烈的主张。",
+    correction: "将政策主张限定到有证据支持的具体场景与条件；在提出全面采购或替代课程前，补充可核实的比较证据，不要把个人体验推广为普遍结论。",
     question: "",
     hints: [],
     suggestion: "",
@@ -1794,11 +1813,15 @@ function validateLiveResult(value: unknown, draft: string, mode: HelpMode, minim
   const unverifiableResearchClaim = addRuleCandidates
     ? buildUnverifiableResearchClaimFeedback(draft)
     : null;
+  const unsupportedUniversalPolicy = addRuleCandidates
+    ? buildUnsupportedUniversalPolicyFeedback(draft)
+    : null;
   const deterministicFeedback = [
     ...(addRuleCandidates ? findLanguageIssues(draft) : []),
     ...protectedAcademicFeedback,
     ...(unsupportedReplacementPrediction ? [unsupportedReplacementPrediction] : []),
     ...(unverifiableResearchClaim ? [unverifiableResearchClaim] : []),
+    ...(unsupportedUniversalPolicy ? [unsupportedUniversalPolicy] : []),
     ...(addRuleCandidates && abruptTopicShift ? [abruptTopicShift] : []),
     ...(addRuleCandidates && overbroadThesis ? [overbroadThesis] : []),
   ].map((item) => applyModeSuggestion(item, mode));
@@ -2303,6 +2326,7 @@ export async function POST(request: Request) {
       buildUnsupportedReplacementPredictionFeedback(draft),
       buildUnverifiableResearchClaimFeedback(draft),
       buildUnsupportedExperimentProofFeedback(draft),
+      buildUnsupportedUniversalPolicyFeedback(draft),
     ].filter((item): item is FeedbackItem => Boolean(item)).map(item => applyModeSuggestion(item, mode));
     const reviewedWithProtectedRules = {
       ...reviewedResult,

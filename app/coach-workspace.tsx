@@ -20,6 +20,7 @@ const confidenceLabels = { "高": "High", "中": "Medium", "低": "Low" } as con
 function displayCategory(category: string) {
   const replacements: Array<[string, string]> = [
     ["语言准确性", "Language accuracy"], ["学术建议", "Academic guidance"], ["学术表达", "Academic expression"],
+    ["语言修改建议", "Language revision suggestion"],
     ["拼写与大小写", "Spelling and capitalisation"], ["拼写错误", "Spelling"], ["主谓一致", "Subject–verb agreement"],
     ["时态与动词形式", "Tense and verb form"], ["时态、名词形式与词形选择", "Tense, noun form and word form"],
     ["时态、名词形式与句子连接", "Tense, noun form and sentence connection"], ["时态、句子结构与冠词", "Tense, sentence structure and articles"],

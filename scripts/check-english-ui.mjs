@@ -10,6 +10,7 @@ assert.ok(workspace.includes("Academic Writing Coach"), "The visible brand must 
 assert.ok(workspace.includes("English candidate"), "The candidate badge must identify the English build");
 assert.ok(workspace.includes("Theme Writing Practice"), "The English theme-writing entry point is missing");
 assert.ok(workspace.includes("Academic English Revision"), "The English revision entry point is missing");
+assert.ok(workspace.includes('["语言修改建议", "Language revision suggestion"]'), "Generic language feedback headings must be translated");
 assert.ok(workspace.includes("<b>Collocation:</b>{item.collocation}"), "Target words must provide an English collocation");
 assert.ok(workspace.includes("<b>Example:</b>{item.example}"), "Target words must provide an English example");
 assert.ok(!workspace.includes("<small>{item.definition}</small>"), "Target-word cards must not display translations below the word");

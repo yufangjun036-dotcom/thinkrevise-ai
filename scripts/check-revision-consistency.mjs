@@ -102,6 +102,15 @@ assert.equal(f.validateLiveResult({feedback:[issue('students is','students is �
 const pluralNumberDraft='A number of students is waiting outside.';
 assert.ok(f.validateLiveResult({feedback:[],modelRevision:pluralNumberDraft},pluralNumberDraft,'coach',0,false).feedback.some(item=>item.quote==='students is'),'A number of takes plural agreement; do not suppress it like the number of');
 const result = (feedback, draft) => ({ summary: '测试', feedback, modelRevision: draft, overview: [], meaningRisk: '' });
+const englishCaseOne = 'Many student use AI tool for university assignment. Last week, I ask an AI chatbot write two paragraph for my presentation, and it give me several useful idea. However, the information not match our course requirement. My tutor said students need check AI answer carefully before submit their work.';
+const englishCaseOneOutput = f.validateLiveResult(result([], englishCaseOne), englishCaseOne, 'coach', 0, false);
+const englishCaseOneCorrections = englishCaseOneOutput.feedback.map(item => item.correction).join(' ');
+for (const expected of ['many students use AI tools', 'university assignments', 'course requirements']) {
+  assert.ok(englishCaseOneCorrections.includes(expected), `English live case must preserve correction: ${expected}`);
+}
+const englishAcademicCase = 'A famous 2025 study found that AI tutoring raises university pass rates by 60 percent. The study reportedly tested 4,000 students, but I cannot locate the original paper, its authors or the research method. I used an AI tutor for one month and my quiz score improved. Therefore, every university should immediately replace most lectures with this AI system because it is proven to work for all students.';
+const englishAcademicOutput = f.validateLiveResult(result([], englishAcademicCase), englishAcademicCase, 'coach', 0, false);
+assert.equal(englishAcademicOutput.feedback.filter(item => item.category === '学术建议 · 论证与证据').length, 2, 'English academic case must flag both unverifiable evidence and the unsupported universal policy');
 const registerEvaluatorDraft = 'We looked at how the drug works in liver cells. The thing we found is that low dose can slow down cell aging. Lots of earlier studies also got similar results. We think this finding is pretty useful. It tells us that natural compounds may help protect cells from damage. We will do more tests later to check if this idea holds.';
 const registerEvaluatorReplay = f.validateLiveResult(result([], registerEvaluatorDraft), registerEvaluatorDraft, 'coach', 0, false);
 const lowDoseIssue = registerEvaluatorReplay.feedback.find(item => item.quote === 'low dose');
