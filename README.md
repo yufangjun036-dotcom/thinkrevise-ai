@@ -80,7 +80,7 @@ Public English site: [https://thinkrevise-ai.vercel.app](https://thinkrevise-ai.
 - Offline verification: passed on 9 September 2026
 - English-only target-word presentation: verified
 - Separate local Git history: complete
-- Separate private GitHub repository: complete
+- Separate public GitHub repository: complete
 - Separate production API configuration: complete; the key remains in the deployment environment and is not committed to Git
 - Separate public Vercel deployment: complete
 - Live-AI three-case spot-check: passed on 9 September 2026
