@@ -1,0 +1,25 @@
+# English Version Acceptance Check
+
+Date: 9 September 2026
+
+## Result
+
+The independent English build passes its local release checks. No paid API request was made.
+
+## Verified
+
+- English home page and both learning entry points render correctly.
+- Target-word cards show English collocations and examples without Chinese translations.
+- The production build compiles successfully.
+- Learning-data checks pass across 15 topic-and-level combinations.
+- Revision regression passes 19 pipeline cases plus span, category and ordering cases.
+- Accuracy-boundary, duplicate-feedback and independent-review safeguards pass.
+- Security, request-budget and prompt-injection boundary checks pass.
+- The accuracy dataset contains 43 cases; academic stability contains 17 cases; long-form validation contains 6 cases.
+- The independent review pack contains 66 cases and 97 labels.
+
+## Still required before publication
+
+- Configure a separate API key/environment for the English deployment.
+- Run a small live-AI spot-check covering a grammatical-error draft, a correct draft and an unverifiable-evidence draft.
+- Create a separate remote repository and deployment project.

@@ -30,7 +30,8 @@ The English version keeps the same learning flow and feedback safeguards as the 
 - [x] English metadata, home page, learning flow and privacy page
 - [x] English target-word display with Chinese translations removed
 - [x] English custom-topic and demo-draft responses
-- [ ] Local dependency installation and production build
-- [ ] Browser walkthrough of both learning paths
-- [ ] English feedback regression evaluation
+- [x] Local dependency installation and production build
+- [x] Browser walkthrough of both learning paths
+- [x] Offline feedback and safeguard regression evaluation
+- [ ] Live English AI feedback spot-check after the separate API key is configured
 - [ ] Separate remote repository and deployment
