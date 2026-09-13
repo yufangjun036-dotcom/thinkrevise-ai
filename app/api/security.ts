@@ -27,7 +27,7 @@ function numericSetting(name: string, fallback: number, minimum: number, maximum
 const limits = {
   perMinute: numericSetting("AI_RATE_LIMIT_PER_MINUTE", 5, 1, 60),
   perDay: numericSetting("AI_RATE_LIMIT_PER_DAY", 20, 1, 2_000),
-  globalPerDay: numericSetting("AI_GLOBAL_DAILY_REQUEST_LIMIT", 100, 1, 100_000),
+  globalPerDay: numericSetting("AI_GLOBAL_DAILY_REQUEST_LIMIT", 300, 1, 100_000),
   perVisitorConcurrent: numericSetting("AI_CONCURRENT_PER_VISITOR", 1, 1, 4),
   globalConcurrent: numericSetting("AI_GLOBAL_CONCURRENT_LIMIT", 3, 1, 100),
 };
