@@ -14,6 +14,8 @@ type FeedbackItem = { category: string; quote: string; why: string; correction?:
 type RevisionComparison = { initialCount: number; resolved: Array<Pick<FeedbackItem, "category" | "quote">>; remainingCount: number; changedCount: number; supplementalCount: number };
 type CoachResponse = { summary: string; feedback: FeedbackItem[]; modelRevision: string; overview: string[]; meaningRisk: string; provider: "openai" | "demo"; fallbackNotice?: string; revisionComparison?: RevisionComparison };
 type CustomTopicResult = { inferredDirection: string; words: Array<Pick<VocabularyItem, "word" | "definition" | "collocation" | "example">>; provider: "openai" };
+type AssignmentBrief = { title: string; instructions: string; wordLimit: string; criteria: string };
+type FeedbackDecision = { issueIndex: number; action: "" | "accept" | "adapt" | "reject"; reason: string };
 
 const confidenceLabels = { "高": "High", "中": "Medium", "低": "Low" } as const;
 
@@ -138,6 +140,42 @@ const DEFAULT_GOAL = "Clarify and focus the central claim";
 const DEFAULT_WEAKNESS = "";
 const SESSION_RECOVERY_KEY = "thinkrevise-session-v1";
 const LEGACY_SESSION_RECOVERY_KEY = "revisioncoach-session-v1";
+const EMPTY_ASSIGNMENT_BRIEF: AssignmentBrief = { title: "", instructions: "", wordLimit: "", criteria: "" };
+const EMPTY_FEEDBACK_DECISION: FeedbackDecision = { issueIndex: 0, action: "", reason: "" };
+
+function clampText(value: unknown, maximum: number) {
+  return typeof value === "string" ? value.slice(0, maximum) : "";
+}
+
+function normaliseAssignmentBrief(value: unknown): AssignmentBrief | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<AssignmentBrief>;
+  const brief = {
+    title: clampText(candidate.title, 120),
+    instructions: clampText(candidate.instructions, 500),
+    wordLimit: clampText(candidate.wordLimit, 5).replace(/\D/g, ""),
+    criteria: clampText(candidate.criteria, 500),
+  };
+  return Object.values(brief).some(Boolean) ? brief : null;
+}
+
+function encodeTaskBrief(brief: AssignmentBrief) {
+  const bytes = new TextEncoder().encode(JSON.stringify(brief));
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeTaskBrief(encoded: string) {
+  try {
+    const padded = encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return normaliseAssignmentBrief(JSON.parse(new TextDecoder().decode(bytes)));
+  } catch {
+    return null;
+  }
+}
 
 type HighlightRange = { start: number; end: number; issueIndexes: number[] };
 
@@ -321,6 +359,9 @@ export default function CoachWorkspace() {
   const [finalDraft, setFinalDraft] = useState("");
   const [reflection, setReflection] = useState("");
   const [recordCopied, setRecordCopied] = useState(false);
+  const [assignmentBrief, setAssignmentBrief] = useState<AssignmentBrief>(EMPTY_ASSIGNMENT_BRIEF);
+  const [taskLinkCopied, setTaskLinkCopied] = useState(false);
+  const [feedbackDecision, setFeedbackDecision] = useState<FeedbackDecision>(EMPTY_FEEDBACK_DECISION);
   const [activeIssue, setActiveIssue] = useState<number | null>(null);
   const [pinnedIssue, setPinnedIssue] = useState<number | null>(null);
   const [loopStep, setLoopStep] = useState(0);
@@ -384,6 +425,9 @@ export default function CoachWorkspace() {
 
   useEffect(() => {
     let saved: Record<string, unknown> | null = null;
+    const sharedBrief = window.location.hash.startsWith("#task=")
+      ? decodeTaskBrief(window.location.hash.slice(6))
+      : null;
     try {
       const raw = window.sessionStorage.getItem(SESSION_RECOVERY_KEY)
         ?? window.sessionStorage.getItem(LEGACY_SESSION_RECOVERY_KEY);
@@ -393,7 +437,13 @@ export default function CoachWorkspace() {
       window.sessionStorage.removeItem(LEGACY_SESSION_RECOVERY_KEY);
     }
     window.queueMicrotask(() => {
-      if (saved?.version === 1 && typeof saved.stage === "string" && saved.stage !== "home") {
+      if (sharedBrief) {
+        setPath("revision");
+        setAssignmentBrief(sharedBrief);
+        setStage("setup");
+        setDemoNotice("A teacher-shared assignment brief has been loaded. Review it before choosing your support mode.");
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      } else if (saved?.version === 1 && typeof saved.stage === "string" && saved.stage !== "home") {
           const savedDraft = typeof saved.draft === "string" ? limitNonWhitespaceCharacters(saved.draft) : "";
           const savedResponse = isCoachResponse(saved.response) ? saved.response : null;
           const savedRevisionResponse = isCoachResponse(saved.revisionResponse) ? saved.revisionResponse : null;
@@ -421,6 +471,14 @@ export default function CoachWorkspace() {
           if (typeof saved.revisedDraft === "string") setRevisedDraft(limitNonWhitespaceCharacters(saved.revisedDraft));
           if (typeof saved.finalDraft === "string") setFinalDraft(limitNonWhitespaceCharacters(saved.finalDraft));
           if (typeof saved.reflection === "string") setReflection(saved.reflection.slice(0, 1000));
+          const savedBrief = normaliseAssignmentBrief(saved.assignmentBrief);
+          if (savedBrief) setAssignmentBrief(savedBrief);
+          if (saved.feedbackDecision && typeof saved.feedbackDecision === "object") {
+            const decision = saved.feedbackDecision as Partial<FeedbackDecision>;
+            if (Number.isInteger(decision.issueIndex) && ["", "accept", "adapt", "reject"].includes(decision.action ?? "") && typeof decision.reason === "string") {
+              setFeedbackDecision({ issueIndex: Math.max(0, Number(decision.issueIndex)), action: decision.action as FeedbackDecision["action"], reason: decision.reason.slice(0, 500) });
+            }
+          }
           setDemoNotice("Your writing progress from before this tab was refreshed has been restored. Please review it before continuing.");
       }
       setRecoveryReady(true);
@@ -437,13 +495,13 @@ export default function CoachWorkspace() {
       window.sessionStorage.setItem(SESSION_RECOVERY_KEY, JSON.stringify({
         version: 1, stage, path, topic, customTopic, customQuestion, customInterpretation,
         level, words, helpMode, goal, draft, selfCheck, response, revisionResponse,
-        revisedDraft, finalDraft, reflection,
+        revisedDraft, finalDraft, reflection, assignmentBrief, feedbackDecision,
       }));
       window.sessionStorage.removeItem(LEGACY_SESSION_RECOVERY_KEY);
     } catch {
       // Storage can be disabled or full. The active page remains usable.
     }
-  }, [recoveryReady, stage, path, topic, customTopic, customQuestion, customInterpretation, level, words, helpMode, goal, draft, selfCheck, response, revisionResponse, revisedDraft, finalDraft, reflection]);
+  }, [recoveryReady, stage, path, topic, customTopic, customQuestion, customInterpretation, level, words, helpMode, goal, draft, selfCheck, response, revisionResponse, revisedDraft, finalDraft, reflection, assignmentBrief, feedbackDecision]);
 
   useEffect(() => () => {
     topicController.current?.abort();
@@ -489,6 +547,9 @@ export default function CoachWorkspace() {
         setFinalDraft("");
         setReflection("");
         setRecordCopied(false);
+        setAssignmentBrief(EMPTY_ASSIGNMENT_BRIEF);
+        setTaskLinkCopied(false);
+        setFeedbackDecision(EMPTY_FEEDBACK_DECISION);
         dismissIssue();
         issueRefs.current.clear();
         setPath(value.path);
@@ -530,6 +591,9 @@ export default function CoachWorkspace() {
     setFinalDraft("");
     setReflection("");
     setRecordCopied(false);
+    setAssignmentBrief(EMPTY_ASSIGNMENT_BRIEF);
+    setTaskLinkCopied(false);
+    setFeedbackDecision(EMPTY_FEEDBACK_DECISION);
     dismissIssue();
     issueRefs.current.clear();
   }
@@ -561,6 +625,54 @@ export default function CoachWorkspace() {
     setPath(nextPath);
     if (nextPath === "practice") setHelpMode("coach");
     setStage("setup"); window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function updateAssignmentBrief(field: keyof AssignmentBrief, value: string) {
+    const maximum = field === "title" ? 120 : field === "wordLimit" ? 5 : 500;
+    const nextValue = field === "wordLimit" ? value.replace(/\D/g, "").slice(0, maximum) : value.slice(0, maximum);
+    setAssignmentBrief((current) => ({ ...current, [field]: nextValue }));
+    setTaskLinkCopied(false);
+  }
+
+  async function copyTeacherTaskLink() {
+    if (!Object.values(assignmentBrief).some((value) => value.trim())) {
+      setError("Add at least one assignment detail before creating a task link.");
+      return;
+    }
+    const url = `${window.location.origin}${window.location.pathname}#task=${encodeTaskBrief(assignmentBrief)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setTaskLinkCopied(true);
+      setError("");
+    } catch {
+      setError("The task link could not be copied automatically. Please check your browser's clipboard permission and try again.");
+    }
+  }
+
+  function buildLearningRecord() {
+    if (!response || !revisionResponse) return "";
+    const comparison = revisionResponse.revisionComparison;
+    const selectedFeedback = response.feedback[feedbackDecision.issueIndex];
+    const assignmentLines = Object.values(assignmentBrief).some(Boolean)
+      ? `Assignment title: ${assignmentBrief.title || "Not provided"}\nAssignment instructions: ${assignmentBrief.instructions || "Not provided"}\nWord limit: ${assignmentBrief.wordLimit || "Not provided"}\nMarking criteria: ${assignmentBrief.criteria || "Not provided"}\n`
+      : "";
+    const decisionLines = selectedFeedback && feedbackDecision.action
+      ? `Feedback decision: ${feedbackDecision.action.toUpperCase()} issue ${feedbackDecision.issueIndex + 1} (${displayCategory(selectedFeedback.category)}: ${selectedFeedback.quote})\nDecision reason: ${feedbackDecision.reason}\n`
+      : "";
+    return `ThinkRevise AI learning record\n${assignmentLines}${path === "practice" ? `Practice topic: ${activeTopicLabel}\n` : ""}Initial self-assessment: ${selfCheck.weakness}\nSession goal: ${goal}\nInitial diagnosis: ${response.feedback.length} items\n${decisionLines}${comparison ? `Not detected again: ${comparison.resolved.length} items\nOriginal issues remaining: ${comparison.remainingCount} items\nRevised locations needing attention: ${comparison.changedCount} items\nAdditional findings: ${comparison.supplementalCount} items` : `Second-draft review: ${revisionResponse.feedback.length} items still need attention`}\nOriginal draft: ${draft}\nSecond draft: ${revisedDraft}\nFinal academic version: ${finalDraft}\nReflection: ${reflection}`;
+  }
+
+  function downloadLearningRecord() {
+    const record = buildLearningRecord();
+    if (!record) return;
+    const blob = new Blob(["\uFEFF", record], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeTitle = (assignmentBrief.title || "thinkrevise-learning-record").replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "thinkrevise-learning-record";
+    link.href = url;
+    link.download = `${safeTitle}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
   }
   async function resolveCustomTopic() {
     if (topicController.current) return false;
@@ -720,6 +832,7 @@ export default function CoachWorkspace() {
       if (!result.ok) throw new Error(data.error || "We could not analyse this text just now.");
       setResponse(data);
       setRevisionResponse(null);
+      setFeedbackDecision(EMPTY_FEEDBACK_DECISION);
       setRevisedDraft(draft);
       setFinalDraft("");
       setStage(helpMode === "rewrite" ? "revise" : "feedback");
@@ -823,7 +936,7 @@ export default function CoachWorkspace() {
 
   return <main className="workspace-shell"><header className="workspace-header"><Brand compact /><Progress stage={stage} helpMode={helpMode} /><div className="prototype-badge"><span /> English candidate</div></header><div className="workspace-body"><button className="back-button" type="button" onClick={goBack}><ArrowIcon back /> Back</button>
     {stage === "setup" && <section className="flow-panel setup-panel"><div className="flow-heading"><p className="overline">Step 1 · Set your task</p><h1>{path === "practice" ? "Prepare a theme writing activity" : "How would you like AI to support you?"}</h1><p>{path === "practice" ? "Choose a topic context first. You decide the position and angle; the system uses the topic only to select relevant vocabulary." : "More direct support may be faster, but it also leaves fewer opportunities for you to think and revise independently."}</p></div>
-      {path === "practice" ? <div className="setup-columns"><fieldset className="choice-fieldset"><legend>Choose or describe a topic that interests you</legend><div className="topic-choices">{topics.map((item) => <button key={item.id} type="button" aria-pressed={topic === item.id} className={topic === item.id ? "active" : ""} onClick={() => selectTopic(item.id)}><span>{item.label}</span><small>{item.prompt}</small></button>)}</div>{topic === "custom" && <div className="custom-topic-fields"><label><span>Describe your direction <em>Required</em></span><textarea value={customTopic} maxLength={200} onChange={(event) => updateCustomTopic(event.target.value)} placeholder="For example: I want to discuss how short-video recommendations influence young people's tastes, choices and communities." /></label><label><span>Add the angle you want to explore <em>Optional</em></span><textarea value={customQuestion} maxLength={300} onChange={(event) => updateCustomQuestion(event.target.value)} placeholder="For example: I want to compare individual choice with platform influence." /></label><small>Use one to three sentences to describe any situation, relationship, experience or social issue. You do not need to name a formal topic. The system will match English target words without prescribing a question you must answer.</small></div>}</fieldset><fieldset className="choice-fieldset"><legend>Choose a level</legend><div className="level-choices">{levels.map((item) => <button key={item.id} type="button" aria-pressed={level === item.id} className={level === item.id ? "active" : ""} onClick={() => selectLevel(item.id)}><strong>{item.label}</strong><span>{item.count} target words</span><small>{item.description}</small></button>)}</div></fieldset></div> : <><fieldset className="choice-fieldset"><legend>Choose the level of support</legend><div className="help-grid">{helpModes.map((item, index) => <button key={item.id} type="button" aria-pressed={helpMode === item.id} className={`${helpMode === item.id ? "active" : ""} ${item.id === "rewrite" ? "editing-mode" : ""}`} onClick={() => setHelpMode(item.id)}><span className="mode-index">0{index + 1}</span><strong>{item.name}</strong><p>{item.description}</p><em>{item.learning}</em></button>)}</div></fieldset>{helpMode === "rewrite" && <div className="integrity-notice"><SparkIcon /><div><strong>This is editing mode, not learning mode</strong><p>AI will rewrite the full text without overwriting your draft or adding facts, data or citations that were not in it. Follow your course rules for AI use.</p></div></div>}</>}
+      {path === "practice" ? <div className="setup-columns"><fieldset className="choice-fieldset"><legend>Choose or describe a topic that interests you</legend><div className="topic-choices">{topics.map((item) => <button key={item.id} type="button" aria-pressed={topic === item.id} className={topic === item.id ? "active" : ""} onClick={() => selectTopic(item.id)}><span>{item.label}</span><small>{item.prompt}</small></button>)}</div>{topic === "custom" && <div className="custom-topic-fields"><label><span>Describe your direction <em>Required</em></span><textarea value={customTopic} maxLength={200} onChange={(event) => updateCustomTopic(event.target.value)} placeholder="For example: I want to discuss how short-video recommendations influence young people's tastes, choices and communities." /></label><label><span>Add the angle you want to explore <em>Optional</em></span><textarea value={customQuestion} maxLength={300} onChange={(event) => updateCustomQuestion(event.target.value)} placeholder="For example: I want to compare individual choice with platform influence." /></label><small>Use one to three sentences to describe any situation, relationship, experience or social issue. You do not need to name a formal topic. The system will match English target words without prescribing a question you must answer.</small></div>}</fieldset><fieldset className="choice-fieldset"><legend>Choose a level</legend><div className="level-choices">{levels.map((item) => <button key={item.id} type="button" aria-pressed={level === item.id} className={level === item.id ? "active" : ""} onClick={() => selectLevel(item.id)}><strong>{item.label}</strong><span>{item.count} target words</span><small>{item.description}</small></button>)}</div></fieldset></div> : <><section className="assignment-brief" aria-labelledby="assignment-brief-title"><div className="assignment-brief-heading"><div><span className="mini-step">Optional assignment context</span><h2 id="assignment-brief-title">Assignment Brief</h2><p>Keep the real task visible while you revise. These details are not sent to AI, so they cannot change the existing error-detection behaviour.</p></div><button className="secondary-button" type="button" onClick={copyTeacherTaskLink}>{taskLinkCopied ? "Task link copied" : "Copy teacher task link"}</button></div><div className="assignment-brief-fields"><label><span>Assignment title</span><input value={assignmentBrief.title} maxLength={120} onChange={(event) => updateAssignmentBrief("title", event.target.value)} placeholder="For example: Critical reflection on AI in education" /></label><label><span>Word limit</span><input value={assignmentBrief.wordLimit} inputMode="numeric" maxLength={5} onChange={(event) => updateAssignmentBrief("wordLimit", event.target.value)} placeholder="For example: 800" /></label><label className="wide"><span>Instructions or question</span><textarea value={assignmentBrief.instructions} maxLength={500} onChange={(event) => updateAssignmentBrief("instructions", event.target.value)} placeholder="Paste the assignment question or main instructions." /></label><label className="wide"><span>Marking criteria</span><textarea value={assignmentBrief.criteria} maxLength={500} onChange={(event) => updateAssignmentBrief("criteria", event.target.value)} placeholder="Add the criteria that you need to check while revising." /></label></div><small className="privacy-note">The shared link contains only these task settings—never a student draft, feedback or personal information.</small></section><fieldset className="choice-fieldset"><legend>Choose the level of support</legend><div className="help-grid">{helpModes.map((item, index) => <button key={item.id} type="button" aria-pressed={helpMode === item.id} className={`${helpMode === item.id ? "active" : ""} ${item.id === "rewrite" ? "editing-mode" : ""}`} onClick={() => setHelpMode(item.id)}><span className="mode-index">0{index + 1}</span><strong>{item.name}</strong><p>{item.description}</p><em>{item.learning}</em></button>)}</div></fieldset>{helpMode === "rewrite" && <div className="integrity-notice"><SparkIcon /><div><strong>This is editing mode, not learning mode</strong><p>AI will rewrite the full text without overwriting your draft or adding facts, data or citations that were not in it. Follow your course rules for AI use.</p></div></div>}</>}
       {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={beginDraft} disabled={!canContinueSetup || isResolvingTopic}>{isResolvingTopic ? "Interpreting your writing direction…" : "Continue to your draft"} <ArrowIcon /></button></section>}
 
     {stage === "draft" && <section className="flow-panel draft-panel"><div className="flow-heading compact-heading"><p className="overline">Step 2 · Your first draft</p><h1>{path === "practice" ? "Write freely within this direction" : "Paste your own English draft"}</h1><p>{path === "practice" ? `Current direction: ${activeTopicLabel}. You choose the position. Aim for 80–150 words and use the target words naturally.` : "Remove names, student numbers and other personal information. AI will not overwrite your original draft."}</p></div>
@@ -834,7 +947,7 @@ export default function CoachWorkspace() {
       {helpMode !== "rewrite" && <div className="self-check"><div><span className="mini-step">Before AI analysis</span><h2>Briefly assess your first draft</h2><p>Your assessment will be kept alongside the AI diagnosis so you can compare your judgement with external feedback and observe how your revision skills develop. The demo button above also fills in a sample response.</p></div><label><span>Summarise the central claim of this text.</span><input value={selfCheck.mainPoint} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, mainPoint: event.target.value })} placeholder="Write a brief summary" /></label><label><span>Which sentence is currently the clearest or most effective?</span><input value={selfCheck.strongest} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, strongest: event.target.value })} placeholder="Optional: paste a sentence from your draft" /></label><label><span>What most needs improvement in this draft?</span><select value={selfCheck.weakness} onChange={(event) => setSelfCheck({ ...selfCheck, weakness: event.target.value })}><option value="" disabled>Choose one assessment</option><option>The central claim is not sufficiently focused or clear</option><option>The argument needs stronger reasons or evidence</option><option>The structure is loose or connections between paragraphs are unclear</option><option>The academic register is inappropriate or too conversational</option><option>The vocabulary range is limited, vague or repetitive</option><option>Language accuracy needs work, including spelling, grammar or tense</option><option>Several areas need improvement; I would like a comprehensive diagnosis</option><option>I am not sure yet and would like AI feedback to help me decide</option></select></label><label><span>What should AI focus on in this session?</span><select value={goal} onChange={(event) => { setGoal(event.target.value); setSelfCheck({ ...selfCheck, help: event.target.value }); }}><option>Clarify and focus the central claim</option><option>Strengthen structure and logical connections between paragraphs</option><option>Improve academic register and precision</option><option>Develop the argument and explain evidence more fully</option><option>Check spelling, grammar and tense</option><option>Provide a comprehensive diagnosis</option></select></label></div>}
       {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={requestFeedback} disabled={isLoading || isGeneratingDemo}>{isLoading ? "Analysing the draft…" : helpMode === "rewrite" ? "Generate a full academic rewrite" : "Analyse and locate issues"}<ArrowIcon /></button></section>}
 
-    {stage === "feedback" && response && <section className="flow-panel feedback-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Overall diagnosis</p><h1>What should you revise?</h1><p>{displaySummary(response)}</p></div><ProviderBadge response={response} />{response.feedback.length === 0 ? <><div className="integrity-notice"><CheckIcon /><div><strong>No reliably locatable issues found</strong><p>This does not guarantee that the text is perfect. You can return to refine the draft or finish this session; the system will not invent feedback to reach a quota.</p></div></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={() => setStage("draft")}>Return to the draft</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></> : <><div className="feedback-grid">{response.feedback.map((item, index) => <article className="feedback-card" key={`${item.category}-${index}`}><div className="feedback-card-top"><span>Issue {index + 1}</span><em>AI confidence: {confidenceLabels[item.confidence]}</em></div><h2>{displayCategory(item.category)}</h2><blockquote>Location: {item.quote}</blockquote><h3>Why this needs attention</h3><p>{displayWhy(item)}</p><h3>How to revise</h3><p className="correction-copy">{displayCorrection(item)}</p>{helpMode === "model" && item.suggestion && <details className="local-example"><summary>View a local revision example</summary><div><span>For reference only, not a replacement draft</span><p>{item.suggestion}</p></div></details>}</article>)}</div><div className="integrity-notice"><SparkIcon /><div><strong>Now revise the full text yourself</strong><p>{helpMode === "model" ? "Local examples only clarify individual issues; they do not complete the whole text for you. After you submit a second draft, all three versions will be kept for comparison." : "Revise the draft using the diagnosis above. After submission, the system will generate an academic version that addresses remaining issues and preserve your first and second drafts for comparison."}</p></div></div><button className="primary-button wide-action" type="button" onClick={() => setStage("revise")}>View highlights and start revising <ArrowIcon /></button></>}</section>}
+    {stage === "feedback" && response && <section className="flow-panel feedback-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Overall diagnosis</p><h1>What should you revise?</h1><p>{displaySummary(response)}</p></div><ProviderBadge response={response} />{response.feedback.length === 0 ? <><div className="integrity-notice"><CheckIcon /><div><strong>No reliably locatable issues found</strong><p>This does not guarantee that the text is perfect. You can return to refine the draft or finish this session; the system will not invent feedback to reach a quota.</p></div></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={() => setStage("draft")}>Return to the draft</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></> : <><div className="feedback-grid">{response.feedback.map((item, index) => <article className="feedback-card" key={`${item.category}-${index}`}><div className="feedback-card-top"><span>Issue {index + 1}</span><em>AI confidence: {confidenceLabels[item.confidence]}</em></div><h2>{displayCategory(item.category)}</h2><blockquote>Location: {item.quote}</blockquote><h3>Why this needs attention</h3><p>{displayWhy(item)}</p><h3>How to revise</h3><p className="correction-copy">{displayCorrection(item)}</p>{helpMode === "model" && item.suggestion && <details className="local-example"><summary>View a local revision example</summary><div><span>For reference only, not a replacement draft</span><p>{item.suggestion}</p></div></details>}</article>)}</div><section className="feedback-decision" aria-labelledby="feedback-decision-title"><div><span className="mini-step">Your judgement</span><h2 id="feedback-decision-title">Decide how to use one AI suggestion</h2><p>Choose one item, decide whether to accept, adapt or reject it, and explain why. This records your reasoning; it is not sent back to AI.</p></div><label><span>Feedback item</span><select value={feedbackDecision.issueIndex} onChange={(event) => setFeedbackDecision({ ...feedbackDecision, issueIndex: Number(event.target.value) })}>{response.feedback.map((item, index) => <option key={`${item.quote}-${index}`} value={index}>Issue {index + 1}: {displayCategory(item.category)}</option>)}</select></label><label><span>Your decision</span><select value={feedbackDecision.action} onChange={(event) => setFeedbackDecision({ ...feedbackDecision, action: event.target.value as FeedbackDecision["action"] })}><option value="" disabled>Choose one</option><option value="accept">Accept</option><option value="adapt">Adapt</option><option value="reject">Reject</option></select></label><label className="wide"><span>Why did you make this decision?</span><textarea value={feedbackDecision.reason} maxLength={500} onChange={(event) => setFeedbackDecision({ ...feedbackDecision, reason: event.target.value })} placeholder="For example: I will adapt this suggestion because the grammar correction is useful, but the proposed wording changes my intended meaning." /></label></section><div className="integrity-notice"><SparkIcon /><div><strong>Now revise the full text yourself</strong><p>{helpMode === "model" ? "Local examples only clarify individual issues; they do not complete the whole text for you. After you submit a second draft, all three versions will be kept for comparison." : "Revise the draft using the diagnosis above. After submission, the system will generate an academic version that addresses remaining issues and preserve your first and second drafts for comparison."}</p></div></div><button className="primary-button wide-action" type="button" disabled={!feedbackDecision.action || !feedbackDecision.reason.trim()} onClick={() => setStage("revise")}>View highlights and start revising <ArrowIcon /></button>{(!feedbackDecision.action || !feedbackDecision.reason.trim()) && <p className="second-check-note">Complete the decision above before moving to the second draft.</p>}</>}</section>}
 
     {stage === "revise" && response && helpMode === "rewrite" && <section className="flow-panel revise-panel direct-rewrite-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Full rewrite</p><h1>Original draft and academic version</h1><p>AI has corrected the language and adjusted the academic register. Check that the revision preserves your intended meaning, facts and position.</p></div><div className="comparison-grid"><div className="version-pane locked"><div><span>Original draft</span><strong>{draftWordCount} words</strong></div><aside className="draft-highlight-legend"><i />Red underlining shows revised locations</aside><p><HighlightedDraft text={draft} feedback={response.feedback} /></p></div><article className="version-pane final direct-result"><div><span>Full academic rewrite</span><strong>{response.modelRevision.trim().split(/\s+/).filter(Boolean).length} words</strong></div><p>{response.modelRevision}</p></article></div><div className="ai-record editing-record"><div><SparkIcon /><span>Editing mode</span></div><p>This version was generated directly by AI and involves the least learner participation. Disclose AI use according to your course rules and verify the content yourself.</p></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={async () => { await navigator.clipboard.writeText(response.modelRevision); setRecordCopied(true); }}>{recordCopied ? "Rewrite copied" : "Copy full rewrite"}</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></section>}
 
@@ -870,7 +983,7 @@ export default function CoachWorkspace() {
       </div>
       <div className="reflection-fields"><label><span>Learning reflection</span><strong>After comparing the original, second and final versions, what is the most important revision principle you learned?</strong><textarea value={reflection} maxLength={1000} onChange={(event) => setReflection(event.target.value)} placeholder="Write your reflection here…" /></label></div>
       <div className="ai-record"><div><SparkIcon /><span>Record of AI contribution</span></div><p>AI first diagnosed the original draft; the learner independently completed a second draft; AI then reanalysed it and addressed remaining issues. The learner must still verify the facts, position and course requirements.</p></div>
-      <div className="finish-actions"><button className="secondary-button" type="button" disabled={!reflection.trim()} onClick={async () => { const comparison = revisionResponse.revisionComparison; await navigator.clipboard.writeText(`ThinkRevise AI learning record\n${path === "practice" ? `Practice topic: ${activeTopicLabel}\n` : ""}Initial self-assessment: ${selfCheck.weakness}\nSession goal: ${goal}\nInitial diagnosis: ${response.feedback.length} items\n${comparison ? `Not detected again: ${comparison.resolved.length} items\nOriginal issues remaining: ${comparison.remainingCount} items\nRevised locations needing attention: ${comparison.changedCount} items\nAdditional findings: ${comparison.supplementalCount} items` : `Second-draft review: ${revisionResponse.feedback.length} items still need attention`}\nOriginal draft: ${draft}\nSecond draft: ${revisedDraft}\nFinal academic version: ${finalDraft}\nReflection: ${reflection}`); setRecordCopied(true); }}>{recordCopied ? "Learning record copied" : "Copy learning record"}</button><button className="primary-button" type="button" disabled={!reflection.trim()} onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div>
+      <div className="finish-actions report-actions"><button className="secondary-button" type="button" disabled={!reflection.trim()} onClick={async () => { await navigator.clipboard.writeText(buildLearningRecord()); setRecordCopied(true); }}>{recordCopied ? "Learning record copied" : "Copy learning record"}</button><button className="secondary-button" type="button" disabled={!reflection.trim()} onClick={downloadLearningRecord}>Download learning report</button><button className="primary-button" type="button" disabled={!reflection.trim()} onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div>
     </section>}
   </div></main>;
 }
