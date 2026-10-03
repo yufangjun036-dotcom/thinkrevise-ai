@@ -5,7 +5,7 @@ import ts from 'typescript';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 let source = fs.readFileSync(new URL('../app/api/coach/route.ts', import.meta.url), 'utf8').replace(/^import .*;\n/gm, '');
-source += '\nexport { validateLiveResult, ensureMinorRevisionConsistency, addRevisionComparison, explicitlySaysNoIssue, reviewCandidateFeedback, isStructurallyUnsupportedUniversalClaim, isStructurallyAbruptTopicShift, isStructurallyOverbroadThesis, isStructurallyMissingPlanInfinitive, isStructurallyMissingPluralAfterMany, isStructurallyBareAquaticEcosystem, isStructurallyProofUsedAsVerb, isStructurallyVarifySpelling, schema };';
+source += '\nexport { validateLiveResult, ensureMinorRevisionConsistency, addRevisionComparison, explicitlySaysNoIssue, reviewCandidateFeedback, isStructurallyUnsupportedUniversalClaim, isStructurallyUnsupportedUniversalAiPolicy, isStructurallyOverbroadAiFairnessThesis, isStructurallyAbruptTopicShift, isStructurallyOverbroadThesis, isStructurallyMissingPlanInfinitive, isStructurallyMissingPluralAfterMany, isStructurallyBareAquaticEcosystem, isStructurallyProofUsedAsVerb, isStructurallyVarifySpelling, schema };';
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 const sandbox = { exports: {} };
 new Function('exports', 'require', 'module', compiled)(sandbox.exports, require, sandbox);
@@ -29,6 +29,23 @@ for (const draft of [
   const output = f.validateLiveResult({summary: '', feedback: [], modelRevision: draft, overview: [], meaningRisk: ''}, draft, 'coach', 0, true);
   assert.equal(output.feedback.length, 0, `Correct construction must not be mechanically flagged: ${draft}`);
   assert.equal(output.modelRevision, draft);
+}
+const universalAiPolicyDraft = 'Schools should use AI everywhere, because it solve most learning problems.';
+const universalAiPolicyOutput = f.validateLiveResult({summary: '', feedback: [], modelRevision: universalAiPolicyDraft, overview: [], meaningRisk: ''}, universalAiPolicyDraft, 'coach', 0, true);
+const universalAiPolicyIssue = universalAiPolicyOutput.feedback.find(item => item.category === '学术建议 · 论证与证据');
+assert.ok(universalAiPolicyIssue, 'Initial diagnosis must identify the unsupported universal AI policy claim');
+assert.ok(f.isStructurallyUnsupportedUniversalAiPolicy(universalAiPolicyIssue, universalAiPolicyDraft));
+const fairnessThesisDraft = 'AI is changing every classroom, and I think it should make education more fair for every student.';
+const fairnessThesisOutput = f.validateLiveResult({summary: '', feedback: [], modelRevision: fairnessThesisDraft, overview: [], meaningRisk: ''}, fairnessThesisDraft, 'coach', 0, true);
+const fairnessThesisIssue = fairnessThesisOutput.feedback.find(item => item.category === '学术建议 · 论点聚焦');
+assert.ok(fairnessThesisIssue, 'Initial diagnosis must identify the overbroad AI fairness thesis');
+assert.ok(f.isStructurallyOverbroadAiFairnessThesis(fairnessThesisIssue, fairnessThesisDraft));
+for (const boundedClaim of [
+  'Some schools may use AI in selected lessons because it can support specific learning tasks.',
+  'AI may support fairness in some classrooms when students have reliable access and teacher guidance.',
+]) {
+  const output = f.validateLiveResult({summary: '', feedback: [], modelRevision: boundedClaim, overview: [], meaningRisk: ''}, boundedClaim, 'coach', 0, true);
+  assert.ok(!output.feedback.some(item => /论证与证据|论点聚焦/.test(item.category)), `A bounded AI claim must not trigger the new safeguards: ${boundedClaim}`);
 }
 const missingPlanToDraft = 'We plan repeat the test next month to verify our conclusion.';
 const missingPlanToOutput = f.validateLiveResult({ summary: '', feedback: [], modelRevision: missingPlanToDraft, overview: [], meaningRisk: '' }, missingPlanToDraft, 'coach', 0, true);
@@ -451,6 +468,9 @@ try {
   globalThis.fetch=async (_url,options) => {
     const body=JSON.parse(options.body);
     assert.equal(body.store,false);
+    const reviewInput=JSON.parse(body.input);
+    assert.deepEqual(reviewInput.candidates.map(item=>item.index),reviewInput.candidates.map((_,index)=>index),'Reviewer candidates carry explicit zero-based IDs');
+    assert.match(body.instructions,/不要假设未出现的分段/,'Coherence review must use actual context');
     return Response.json({output_text:JSON.stringify({approved:[],reason:'No necessary changes',modelRevision:preservedMeaning})});
   };
   const rejected=await f.reviewCandidateFeedback(result([issue('just one','删除 just','学术语气')],preservedMeaning),preservedMeaning,'test-placeholder',new AbortController().signal);
@@ -485,11 +505,14 @@ try {
   const abruptValidated=f.validateLiveResult(result([mislabeledAbrupt],abruptDraft),abruptDraft,'coach',0,false);
   assert.equal(abruptValidated.feedback[0].category,'学术建议 · 衔接与连贯','A two-sentence topic jump is a cohesion issue, not thesis focus');
   const protectedAbrupt=await f.reviewCandidateFeedback(result(abruptValidated.feedback,abruptDraft),abruptDraft,'test-placeholder',new AbortController().signal);
-  assert.equal(protectedAbrupt.feedback.length,1,'A reviewer fluctuation cannot delete a structurally proven abrupt topic shift');
+  assert.equal(protectedAbrupt.feedback.length,0,'Lexical non-overlap must not override a semantic reviewer veto');
   const connectedDraft='Campus recycling can reduce waste. This approach reduces the amount of recyclable material sent to landfill.';
   const connectedCandidate={...mislabeledAbrupt,quote:connectedDraft,category:'学术建议 · 衔接与连贯'};
   const connectedResult=await f.reviewCandidateFeedback(result([connectedCandidate],connectedDraft),connectedDraft,'test-placeholder',new AbortController().signal);
   assert.equal(connectedResult.feedback.length,0,'An explicitly connected sentence pair is not protected as a topic shift');
+  globalThis.fetch=async () => Response.json({output_text:JSON.stringify({approved:[0],reason:'The two subjects are unrelated in this context',modelRevision:abruptDraft})});
+  const confirmedAbrupt=await f.reviewCandidateFeedback(result(abruptValidated.feedback,abruptDraft),abruptDraft,'test-placeholder',new AbortController().signal);
+  assert.equal(confirmedAbrupt.feedback.length,1,'A semantically confirmed topic shift must remain available');
   globalThis.fetch=async () => Response.json({output_text:JSON.stringify({approved:[999],reason:'bad',modelRevision:''})});
   await assert.rejects(()=>f.reviewCandidateFeedback(result([exactForm],replayDraft),replayDraft,'test-placeholder',new AbortController().signal),/Invalid review decision/);
 } finally {globalThis.fetch=realFetch;}
@@ -558,7 +581,18 @@ assert.equal(f.validateLiveResult(result([admittedCohesion],connectedParagraph),
 const qualifiedEvidence='A survey found that 15 of 24 volunteers preferred rapid feedback. The result describes preference in this small sample and does not show that automated comments improve academic achievement.';
 assert.equal(f.validateLiveResult(result([],qualifiedEvidence),qualifiedEvidence,'coach',0,false).feedback.length,0,'The result is an explicit anaphoric link when the previous sentence reports a survey finding');
 const unrelatedDefiniteNoun='Campus recycling can reduce waste. The study of artificial intelligence requires transparent data governance.';
-assert.ok(f.validateLiveResult(result([],unrelatedDefiniteNoun),unrelatedDefiniteNoun,'coach',0,false).feedback.some(item=>item.category==='学术建议 · 衔接与连贯'),'A definite noun without a matching antecedent must not hide an abrupt topic shift');
+for (const coherentDraft of [
+  'Students need time to revise their drafts. Teachers provide useful feedback during writing practice.',
+  'Students needs time to revise their drafts. Teachers provide useful feedback during writing practice.',
+  'The patient reported severe pain. A nurse offered medication.',
+  'Rain continued throughout the night. Roads were flooded by morning.',
+]) {
+  for (const addRules of [true,false]) {
+    const checked=f.validateLiveResult(result([],coherentDraft),coherentDraft,'coach',0,false,addRules);
+    assert.equal(checked.feedback.filter(item=>item.category==='学术建议 · 衔接与连贯').length,0,'Implicit semantic continuity must not be replaced by a keyword-overlap rule');
+  }
+}
+assert.equal(f.validateLiveResult(result([],unrelatedDefiniteNoun),unrelatedDefiniteNoun,'coach',0,false).feedback.filter(item=>item.category==='学术建议 · 衔接与连贯').length,0,'Topic shifts require semantic evidence, not automatic lexical warnings');
 const longBlockShift='Students should verify generated claims before using them in assessed work. This verification practice helps them compare claims with reliable evidence. A short verification note can record the decision. Campus transport policy should reduce private car use. A transport plan can increase bus frequency and improve walking routes.';
 const shiftedTopicCandidate={...issue('Campus transport policy should reduce private car use.','将交通内容移到独立段落','学术建议 · 论点聚焦'),why:'文章在此切换到另一个主题，后文核心焦点已转向交通政策。'};
 const longBlockOutput=f.validateLiveResult(result([shiftedTopicCandidate],longBlockShift),longBlockShift,'coach',0,false);
@@ -572,7 +606,7 @@ for (const testCase of longformCases.filter(testCase=>testCase.polarity==='clear
   assert.equal(cohesionFeedback.length,0,`Clear long-form control must not gain cohesion feedback: ${testCase.id} ${JSON.stringify(cohesionFeedback)}`);
 }
 const longCohesionCase=longformCases.find(testCase=>testCase.id==='long-cohesion-abrupt-shift');
-assert.ok(f.validateLiveResult(result([],longCohesionCase.draft),longCohesionCase.draft,'coach',0,false).feedback.some(item=>item.category==='学术建议 · 衔接与连贯'),'A sustained, topically separate three-sentence block must produce cohesion feedback');
+assert.equal(f.validateLiveResult(result([],longCohesionCase.draft),longCohesionCase.draft,'coach',0,false).feedback.filter(item=>item.category==='学术建议 · 衔接与连贯').length,0,'Even a long topic shift must not bypass semantic analysis');
 const qualifiedLongform=longformCases.find(testCase=>testCase.id==='long-scope-bounded-control').draft;
 const qualifiedQuote='Their average revision score increased from the first assignment to the third assignment. This change may indicate that rapid comments supported repeated editing, although the design cannot isolate the tool from tutor meetings, additional practice, or growing familiarity with the assessment.';
 const redundantWeakening={...issue(qualifiedQuote,'This change may indicate that rapid comments supported repeated editing → This change may indicate an association between rapid comments and repeated editing','学术建议 · 论证与证据'),why:'不宜把结果直接理解为工具 supported 修订的明确证据。'};

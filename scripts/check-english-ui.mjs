@@ -19,11 +19,11 @@ assert.ok(workspace.includes('path === "practice" ? limitWords(value, 300) : lim
 assert.ok(workspace.includes("InteractiveHighlightedDraft"), "Learner revision must connect feedback to highlighted source text");
 assert.ok(styles.includes(".inline-issue-popover"), "Inline issue feedback must have visible popover styling");
 assert.ok(styles.includes(".issue-navigator"), "Long drafts must include previous/next issue navigation");
-assert.ok(workspace.includes("Copy teacher task link"), "Teachers must be able to share assignment settings without a student draft");
-assert.ok(workspace.includes("These details are not sent to AI"), "Assignment context must remain outside the AI request boundary");
-assert.ok(workspace.includes("Decide how to use one AI suggestion"), "The learning flow must record a learner feedback decision");
+assert.ok(workspace.includes("Share assignment requirements"), "Teachers must be able to share assignment settings without a student draft");
+assert.ok(workspace.includes("Clicking check sends the current draft and these details to AI") && workspace.includes("<AssignmentReview"), "Separate assignment review must disclose what is sent");
+assert.ok(workspace.includes("Your decision"), "The learning flow must record a learner feedback decision");
 assert.ok(workspace.includes("Download learning report"), "The completed learning record must be downloadable");
 assert.ok(workspace.includes("const [assignmentBrief") && !workspace.includes("taskPrompt: assignmentBrief"), "Assignment settings must not alter the established AI prompt");
-assert.ok(styles.includes(".assignment-brief") && styles.includes(".feedback-decision"), "New learning-flow controls must have responsive styling");
+assert.ok(styles.includes(".assignment-brief") && styles.includes(".feedback-choice"), "New learning-flow controls must have responsive styling");
 
 console.log("English-interface copy checks passed.");

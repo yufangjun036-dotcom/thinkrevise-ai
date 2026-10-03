@@ -30,7 +30,7 @@ const [
 ]);
 
 const scripts = JSON.parse(packageJson).scripts;
-assert.equal(JSON.parse(packageJson).name, "thinkrevise-ai-chinese", "The Chinese package name has drifted");
+assert.equal(JSON.parse(packageJson).name, "thinkrevise-ai", "The English package name has drifted");
 for (const required of ["lint", "check:data", "check:limits", "check:copy", "check:safeguards", "check:security", "benchmark:validate", "review:check", "samples:check-template", "build"]) {
   assert.match(scripts.verify, new RegExp(`npm run ${required.replace(":", "\\:")}`), `verify is missing ${required}`);
 }
@@ -40,15 +40,15 @@ assert.match(scripts["verify:release"], /npm run check:release/);
 assert.match(gitignore, /^\.env\*/m, "Environment files must remain excluded from Git");
 assert.match(gitignore, /external-samples\.local\.json/, "Private external essays must remain excluded from Git");
 assert.match(gitignore, /independent-review-response\.local\.json/, "Independent reviewer responses must remain excluded from Git");
-assert.match(layout, /lang="zh-CN"/, "The validated build must remain the Chinese version");
-assert.match(layout, /ThinkRevise AI \(Chinese\)/, "The Chinese candidate metadata name is missing");
-assert.match(workspace, /中文版候选版/, "The candidate-build label is missing");
+assert.match(layout, /lang="en"/, "The build must remain the English version");
+assert.match(layout, /ThinkRevise AI/, "The English metadata name is missing");
+assert.match(workspace, /English candidate/, "The candidate-build label is missing");
 assert.doesNotMatch(workspace, /> 中文原型</, "The old prototype label must not return");
 assert.match(workspace, /apiRequestHeaders\(\)/, "AI requests must use an anonymous same-tab session identifier");
 assert.match(workspace, /InteractiveHighlightedDraft/, "Issue locations must remain connected to inline guidance");
 assert.match(workspace, /role="alert"/, "Learner-facing errors must be announced");
 assert.match(workspace, /role="dialog"/, "Inline issue guidance must expose dialog semantics");
-assert.match(workspace, /aria-label="关闭修改提示"/, "Inline issue guidance must have an accessible close action");
+assert.match(workspace, /aria-label="Close revision guidance"/, "Inline issue guidance must have an accessible close action");
 assert.match(styles, /@media\s*\(max-width:\s*900px\)/, "The tablet/mobile stacking breakpoint is missing");
 assert.match(styles, /@media\s*\(max-width:\s*640px\)/, "The narrow-phone breakpoint is missing");
 assert.match(styles, /\.setup-columns,\s*\.feedback-grid,\s*\.comparison-grid\s*\{\s*grid-template-columns:\s*1fr/, "Comparisons must stack on narrow screens");
@@ -61,7 +61,7 @@ assert.match(styles, /\.back-button\s*\{[^}]*min-height:\s*44px;/, "Back navigat
 assert.match(styles, /\.inline-issue-heading button\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;/, "Issue popover close control must keep a 44px touch target");
 assert.match(nextConfig, /poweredByHeader:\s*false/);
 assert.match(nextConfig, /X-Frame-Options/);
-assert.match(privacy, /API 数据默认不会用于训练模型/);
+assert.match(privacy, /API data is not used to train models by default/);
 assert.match(roadmap, /阶段 4E/);
 assert.match(languageChecklist, /Chinese version is the source of truth/i);
 

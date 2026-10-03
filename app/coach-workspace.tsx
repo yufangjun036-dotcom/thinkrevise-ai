@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Image from "next/image";
+import { feedbackForMode } from "./feedback-presentation";
+import LinkedRevisionEditor from "./linked-revision-editor";
+import AssignmentReview from "./assignment-review";
 import Link from "next/link";
 import { buildDemoDraft, buildFastDemoDraft, cleanDemoDraft, getDemoMainPoint, helpModes, levels, pickVocabulary, topics, type HelpMode, type LevelId, type TopicId, type VocabularyItem } from "./data";
 import { mediaConfig } from "./site-config";
@@ -9,18 +12,19 @@ import { countNonWhitespaceCharacters, limitNonWhitespaceCharacters, MAX_RAW_DRA
 
 type Path = "practice" | "revision";
 type Stage = "home" | "setup" | "draft" | "feedback" | "revise" | "reflect";
-type RevisionStatus = "remaining" | "changed" | "supplemental";
-type FeedbackItem = { category: string; quote: string; why: string; correction?: string; question?: string; hints?: string[]; suggestion?: string; confidence: "高" | "中" | "低"; revisionStatus?: RevisionStatus };
-type RevisionComparison = { initialCount: number; resolved: Array<Pick<FeedbackItem, "category" | "quote">>; remainingCount: number; changedCount: number; supplementalCount: number };
+type RevisionStatus = "partial" | "remaining" | "changed" | "supplemental";
+type FeedbackItem = { whyEnglish?: string; correctionEnglish?: string; category: string; quote: string; why: string; correction?: string; question?: string; hints?: string[]; suggestion?: string; confidence: "高" | "中" | "低"; revisionStatus?: RevisionStatus; revisionProgress?: { completed: string[]; pending: string[] } };
+type RevisionComparison = { initialCount: number; resolved: Array<Pick<FeedbackItem, "category" | "quote">>; remainingCount: number; partialCount?: number; changedCount: number; supplementalCount: number };
 type CoachResponse = { summary: string; feedback: FeedbackItem[]; modelRevision: string; overview: string[]; meaningRisk: string; provider: "openai" | "demo"; fallbackNotice?: string; revisionComparison?: RevisionComparison };
 type CustomTopicResult = { inferredDirection: string; words: Array<Pick<VocabularyItem, "word" | "definition" | "collocation" | "example">>; provider: "openai" };
 type AssignmentBrief = { title: string; instructions: string; wordLimit: string; criteria: string };
-type FeedbackDecision = { issueIndex: number; action: "" | "accept" | "adapt" | "reject"; reason: string };
+type FeedbackDecision = { issueIndex: number; action: "" | "accept" | "adapt" | "reject" };
 
 const confidenceLabels = { "高": "High", "中": "Medium", "低": "Low" } as const;
 
 function displayCategory(category: string) {
   const replacements: Array<[string, string]> = [
+    ["综合语言修改", "Combined language corrections"],
     ["语言准确性", "Language accuracy"], ["学术建议", "Academic guidance"], ["学术表达", "Academic expression"],
     ["语言修改建议", "Language revision suggestion"],
     ["拼写与大小写", "Spelling and capitalisation"], ["拼写错误", "Spelling"], ["主谓一致", "Subject–verb agreement"],
@@ -44,23 +48,26 @@ function displayCategory(category: string) {
   return replacements.reduce((text, [source, target]) => text.replace(source, target), category);
 }
 
+function displayEdit(label: string) {
+  return label.replace(/在“([^”]+)”后补入“([^”]+)”/g, 'after “$1”, insert “$2”')
+    .replace(/在句首补入“([^”]+)”/g, 'at the start, insert “$1”')
+    .replace(/删除“([^”]+)”/g, 'remove “$1”');
+}
+
 function displayWhy(item: FeedbackItem) {
-  if (!/[\p{Script=Han}]/u.test(item.why)) return item.why;
-  const category = displayCategory(item.category);
-  if (item.category.startsWith("语言")) return `The highlighted passage contains a ${category.replace(/^Language accuracy · /, "").toLowerCase()} issue that affects language accuracy.`;
-  if (/论证与证据/.test(item.category)) return "The claim needs stronger, verifiable evidence or a more carefully limited conclusion.";
-  if (/论点聚焦/.test(item.category)) return "The central claim is too broad or insufficiently focused for the support provided.";
-  if (/衔接与连贯/.test(item.category)) return "The relationship between these ideas needs a clearer logical connection.";
-  return "This expression needs greater precision or a more appropriate academic register.";
+  if (item.whyEnglish) return item.whyEnglish;
+  return /[\p{Script=Han}]/u.test(item.why)
+    ? 'Review the highlighted passage and its suggested correction. An English explanation is unavailable.'
+    : item.why;
 }
 
 function displayCorrection(item: FeedbackItem) {
-  if (!/[\p{Script=Han}]/u.test(item.correction || "")) return item.correction || "Revise this passage in your own words using the guidance above.";
-  const directEdit = item.correction?.split("。")[0]?.trim();
-  if (directEdit?.includes("→") && !/[\p{Script=Han}]/u.test(directEdit)) return `${directEdit}.`;
-  return item.category.startsWith("语言")
-    ? "Correct the highlighted form while preserving the intended meaning."
-    : "Limit the claim to what the available context and evidence can support.";
+  if (item.correctionEnglish) return item.correctionEnglish;
+  const correction = item.correction || '';
+  if (!/[\p{Script=Han}]/u.test(correction)) return correction || 'Revise this passage in your own words using the guidance above.';
+  const replacement = correction.split('。')[0];
+  return replacement.includes('→') && !/[\p{Script=Han}]/u.test(replacement)
+    ? replacement : 'Review the highlighted passage. An English correction is unavailable; do not treat this as a confirmed repair.';
 }
 
 function displaySummary(response: CoachResponse) {
@@ -136,12 +143,11 @@ const revisionLoopSlides = [
   },
 ] as const;
 
-const DEFAULT_GOAL = "Clarify and focus the central claim";
+const DEFAULT_GOAL = "";
 const DEFAULT_WEAKNESS = "";
 const SESSION_RECOVERY_KEY = "thinkrevise-session-v1";
 const LEGACY_SESSION_RECOVERY_KEY = "revisioncoach-session-v1";
 const EMPTY_ASSIGNMENT_BRIEF: AssignmentBrief = { title: "", instructions: "", wordLimit: "", criteria: "" };
-const EMPTY_FEEDBACK_DECISION: FeedbackDecision = { issueIndex: 0, action: "", reason: "" };
 
 function clampText(value: unknown, maximum: number) {
   return typeof value === "string" ? value.slice(0, maximum) : "";
@@ -249,7 +255,7 @@ function InteractiveHighlightedDraft({
   activeIssue: number | null;
   pinnedIssue: number | null;
   onShowIssue: (index: number | null) => void;
-  onPinIssue: (index: number) => void;
+  onPinIssue: (index: number, sourceStart: number) => void;
   onDismiss: () => void;
   issueRefs: RefObject<Map<number, HTMLButtonElement>>;
 }) {
@@ -264,7 +270,7 @@ function InteractiveHighlightedDraft({
     const item = feedback[issueIndex];
     const isOpen = activeIssue !== null && range.issueIndexes.includes(activeIssue);
     content.push(
-      <span className="draft-error-wrap" key={`${range.start}-${range.end}`} onMouseEnter={() => { if (pinnedIssue === null) onShowIssue(range.issueIndexes[0]); }} onMouseLeave={() => { if (pinnedIssue === null) onShowIssue(null); }}>
+      <span className="draft-error-wrap" key={`${range.start}-${range.end}`} onMouseEnter={() => { if (pinnedIssue === null && window.matchMedia("(min-width: 641px) and (hover: hover)").matches) onShowIssue(range.issueIndexes[0]); }} onMouseLeave={() => { if (pinnedIssue === null) onShowIssue(null); }}>
         <button
           type="button"
           className={`draft-error-mark interactive ${isOpen ? "active" : ""}`}
@@ -275,9 +281,9 @@ function InteractiveHighlightedDraft({
           }}
           aria-label={`View issue: ${range.issueIndexes.map((index) => displayCategory(feedback[index].category)).join(", ")}`}
           aria-expanded={isOpen}
-          onFocus={() => { if (pinnedIssue === null) onShowIssue(range.issueIndexes[0]); }}
+          onFocus={(event) => { if (pinnedIssue === null && event.currentTarget.matches(":focus-visible")) onShowIssue(range.issueIndexes[0]); }}
           onBlur={() => { if (pinnedIssue === null) onShowIssue(null); }}
-          onClick={() => onPinIssue(issueIndex)}
+          onClick={() => onPinIssue(issueIndex, text.toLocaleLowerCase().indexOf(item.quote.trim().replace(/^[“”"']+|[“”"']+$/g, "").toLocaleLowerCase(), range.start))}
         >
           {text.slice(range.start, range.end)}
         </button>
@@ -350,6 +356,7 @@ export default function CoachWorkspace() {
   const revisionController = useRef<AbortController | null>(null);
   const [selfCheck, setSelfCheck] = useState({ mainPoint: "", strongest: "", weakness: DEFAULT_WEAKNESS, help: DEFAULT_GOAL });
   const [response, setResponse] = useState<CoachResponse | null>(null);
+  const displayFeedback = useMemo(() => response?.feedback.map(item => feedbackForMode(item, helpMode)) ?? [], [response, helpMode]);
   const [revisionResponse, setRevisionResponse] = useState<CoachResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
@@ -361,9 +368,11 @@ export default function CoachWorkspace() {
   const [recordCopied, setRecordCopied] = useState(false);
   const [assignmentBrief, setAssignmentBrief] = useState<AssignmentBrief>(EMPTY_ASSIGNMENT_BRIEF);
   const [taskLinkCopied, setTaskLinkCopied] = useState(false);
-  const [feedbackDecision, setFeedbackDecision] = useState<FeedbackDecision>(EMPTY_FEEDBACK_DECISION);
+  const [feedbackDecisions, setFeedbackDecisions] = useState<FeedbackDecision[]>([]);
   const [activeIssue, setActiveIssue] = useState<number | null>(null);
   const [pinnedIssue, setPinnedIssue] = useState<number | null>(null);
+  const [linkedSourceStart, setLinkedSourceStart] = useState<number | undefined>();
+  const [locationNavigationId, setLocationNavigationId] = useState(0);
   const [loopStep, setLoopStep] = useState(0);
   const loopDragStartX = useRef<number | null>(null);
   const draftRef = useRef("");
@@ -399,9 +408,11 @@ export default function CoachWorkspace() {
     const normalized = response?.feedback.length ? (index + response.feedback.length) % response.feedback.length : 0;
     setActiveIssue(normalized);
     setPinnedIssue(pin ? normalized : null);
+    setLinkedSourceStart(undefined);
+    setLocationNavigationId(value => value + 1);
     window.requestAnimationFrame(() => {
       const mark = issueRefs.current.get(normalized);
-      mark?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+      mark?.scrollIntoView({ behavior: "instant", block: "center", inline: "nearest" });
       mark?.focus({ preventScroll: true });
     });
   }
@@ -409,6 +420,15 @@ export default function CoachWorkspace() {
   function dismissIssue() {
     setActiveIssue(null);
     setPinnedIssue(null);
+    setLinkedSourceStart(undefined);
+  }
+
+  function pinLinkedIssue(index: number, sourceStart: number) {
+    if (pinnedIssue === index && linkedSourceStart === sourceStart) { dismissIssue(); return; }
+    setActiveIssue(index);
+    setPinnedIssue(index);
+    setLinkedSourceStart(sourceStart);
+    setLocationNavigationId(value => value + 1);
   }
 
   function moveLoop(direction: -1 | 1) {
@@ -473,12 +493,19 @@ export default function CoachWorkspace() {
           if (typeof saved.reflection === "string") setReflection(saved.reflection.slice(0, 1000));
           const savedBrief = normaliseAssignmentBrief(saved.assignmentBrief);
           if (savedBrief) setAssignmentBrief(savedBrief);
-          if (saved.feedbackDecision && typeof saved.feedbackDecision === "object") {
-            const decision = saved.feedbackDecision as Partial<FeedbackDecision>;
-            if (Number.isInteger(decision.issueIndex) && ["", "accept", "adapt", "reject"].includes(decision.action ?? "") && typeof decision.reason === "string") {
-              setFeedbackDecision({ issueIndex: Math.max(0, Number(decision.issueIndex)), action: decision.action as FeedbackDecision["action"], reason: decision.reason.slice(0, 500) });
+          const savedDecisions = Array.isArray(saved.feedbackDecisions) ? saved.feedbackDecisions : saved.feedbackDecision ? [saved.feedbackDecision] : [];
+          const restored: FeedbackDecision[] = [];
+          for (const value of savedDecisions) {
+            if (!value || typeof value !== "object") continue;
+            const item = value as Partial<FeedbackDecision>;
+            const index = Number(item.issueIndex);
+            if (Number.isInteger(index) && index >= 0 && index < (savedResponse?.feedback.length ?? 0)
+              && ["accept", "adapt", "reject"].includes(item.action ?? "")
+              && !restored.some(decision => decision.issueIndex === index)) {
+              restored.push({ issueIndex: index, action: item.action as FeedbackDecision["action"] });
             }
           }
+          setFeedbackDecisions(restored);
           setDemoNotice("Your writing progress from before this tab was refreshed has been restored. Please review it before continuing.");
       }
       setRecoveryReady(true);
@@ -495,13 +522,13 @@ export default function CoachWorkspace() {
       window.sessionStorage.setItem(SESSION_RECOVERY_KEY, JSON.stringify({
         version: 1, stage, path, topic, customTopic, customQuestion, customInterpretation,
         level, words, helpMode, goal, draft, selfCheck, response, revisionResponse,
-        revisedDraft, finalDraft, reflection, assignmentBrief, feedbackDecision,
+        revisedDraft, finalDraft, reflection, assignmentBrief, feedbackDecisions,
       }));
       window.sessionStorage.removeItem(LEGACY_SESSION_RECOVERY_KEY);
     } catch {
       // Storage can be disabled or full. The active page remains usable.
     }
-  }, [recoveryReady, stage, path, topic, customTopic, customQuestion, customInterpretation, level, words, helpMode, goal, draft, selfCheck, response, revisionResponse, revisedDraft, finalDraft, reflection, assignmentBrief, feedbackDecision]);
+  }, [recoveryReady, stage, path, topic, customTopic, customQuestion, customInterpretation, level, words, helpMode, goal, draft, selfCheck, response, revisionResponse, revisedDraft, finalDraft, reflection, assignmentBrief, feedbackDecisions]);
 
   useEffect(() => () => {
     topicController.current?.abort();
@@ -549,7 +576,7 @@ export default function CoachWorkspace() {
         setRecordCopied(false);
         setAssignmentBrief(EMPTY_ASSIGNMENT_BRIEF);
         setTaskLinkCopied(false);
-        setFeedbackDecision(EMPTY_FEEDBACK_DECISION);
+        setFeedbackDecisions([]);
         dismissIssue();
         issueRefs.current.clear();
         setPath(value.path);
@@ -593,7 +620,7 @@ export default function CoachWorkspace() {
     setRecordCopied(false);
     setAssignmentBrief(EMPTY_ASSIGNMENT_BRIEF);
     setTaskLinkCopied(false);
-    setFeedbackDecision(EMPTY_FEEDBACK_DECISION);
+    setFeedbackDecisions([]);
     dismissIssue();
     issueRefs.current.clear();
   }
@@ -652,14 +679,15 @@ export default function CoachWorkspace() {
   function buildLearningRecord() {
     if (!response || !revisionResponse) return "";
     const comparison = revisionResponse.revisionComparison;
-    const selectedFeedback = response.feedback[feedbackDecision.issueIndex];
     const assignmentLines = Object.values(assignmentBrief).some(Boolean)
       ? `Assignment title: ${assignmentBrief.title || "Not provided"}\nAssignment instructions: ${assignmentBrief.instructions || "Not provided"}\nWord limit: ${assignmentBrief.wordLimit || "Not provided"}\nMarking criteria: ${assignmentBrief.criteria || "Not provided"}\n`
       : "";
-    const decisionLines = selectedFeedback && feedbackDecision.action
-      ? `Feedback decision: ${feedbackDecision.action.toUpperCase()} issue ${feedbackDecision.issueIndex + 1} (${displayCategory(selectedFeedback.category)}: ${selectedFeedback.quote})\nDecision reason: ${feedbackDecision.reason}\n`
-      : "";
-    return `ThinkRevise AI learning record\n${assignmentLines}${path === "practice" ? `Practice topic: ${activeTopicLabel}\n` : ""}Initial self-assessment: ${selfCheck.weakness}\nSession goal: ${goal}\nInitial diagnosis: ${response.feedback.length} items\n${decisionLines}${comparison ? `Not detected again: ${comparison.resolved.length} items\nOriginal issues remaining: ${comparison.remainingCount} items\nRevised locations needing attention: ${comparison.changedCount} items\nAdditional findings: ${comparison.supplementalCount} items` : `Second-draft review: ${revisionResponse.feedback.length} items still need attention`}\nOriginal draft: ${draft}\nSecond draft: ${revisedDraft}\nFinal academic version: ${finalDraft}\nReflection: ${reflection}`;
+    const decisionLines = feedbackDecisions.filter(item => item.action && response.feedback[item.issueIndex]).sort((a, b) => a.issueIndex - b.issueIndex).map(decision => {
+      const item = response.feedback[decision.issueIndex];
+      return `Feedback decision: ${decision.action.toUpperCase()} · Issue ${decision.issueIndex + 1} (${displayCategory(item.category)}: ${item.quote})\n`;
+    }).join("");
+    const details = "\n\nFirst-round feedback\n" + response.feedback.map((item, i) => `${i+1}. ${displayCategory(item.category)}\nLocation: ${item.quote}\n${displayWhy(item)}\n${displayCorrection(item)}`).join("\n\n") + "\n\nSecond-draft feedback\n" + revisionResponse.feedback.map((item, i) => `${i+1}. ${displayCategory(item.category)} [${item.revisionStatus ?? ""}]\n${displayCorrection(item)}\nCompleted: ${item.revisionProgress?.completed.map(displayEdit).join("; ") ?? ""}\nPending: ${item.revisionProgress?.pending.map(displayEdit).join("; ") ?? ""}`).join("\n\n");
+    return `ThinkRevise AI learning record\n${assignmentLines}${path === "practice" ? `Practice topic: ${activeTopicLabel}\n` : ""}Initial self-assessment: ${selfCheck.weakness || "Not provided (optional)"}\nSession goal: ${goal || "No specific focus"}\nInitial diagnosis: ${response.feedback.length} items\n${decisionLines}${comparison ? `Not detected again: ${comparison.resolved.length} items\nOriginal issues remaining: ${comparison.remainingCount} items\nRevised locations needing attention: ${comparison.changedCount} items\nMissed initially (found on recheck): ${comparison.supplementalCount} items` : `Second-draft review: ${revisionResponse.feedback.length} items still need attention`}\nOriginal draft: ${draft}\nSecond draft: ${revisedDraft}\nFinal academic version: ${finalDraft}\nReflection: ${reflection}${details}\nFeedback items may contain several edits; item counts are not error counts. AI feedback requires human verification.`;
   }
 
   function downloadLearningRecord() {
@@ -816,7 +844,6 @@ export default function CoachWorkspace() {
     setError("");
     setRevisionError("");
     if (countNonWhitespaceCharacters(draft) < 20) { setError("Please enter an English draft containing at least 20 non-whitespace characters. You can also use the demo draft."); return; }
-    if (helpMode !== "rewrite" && (!selfCheck.mainPoint || !selfCheck.weakness || !selfCheck.help)) { setError("Before requesting AI feedback, complete the central-claim, self-assessment and support-preference fields."); return; }
     setResponse(null);
     setRevisionResponse(null);
     setRecordCopied(false);
@@ -832,7 +859,7 @@ export default function CoachWorkspace() {
       if (!result.ok) throw new Error(data.error || "We could not analyse this text just now.");
       setResponse(data);
       setRevisionResponse(null);
-      setFeedbackDecision(EMPTY_FEEDBACK_DECISION);
+      setFeedbackDecisions([]);
       setRevisedDraft(draft);
       setFinalDraft("");
       setStage(helpMode === "rewrite" ? "revise" : "feedback");
@@ -845,6 +872,24 @@ export default function CoachWorkspace() {
         setIsLoading(false);
       }
     }
+  }
+
+
+  function updateFeedbackDecision(issueIndex: number, patch: Partial<FeedbackDecision>) {
+    setFeedbackDecisions(current => {
+      const previous = current.find(item => item.issueIndex === issueIndex) ?? { issueIndex, action: "" as const };
+      return [...current.filter(item => item.issueIndex !== issueIndex), { ...previous, ...patch, issueIndex }];
+    });
+  }
+
+  function renderFeedbackDecision(index: number) {
+    const decision = feedbackDecisions.find(item => item.issueIndex === index);
+    const labels = { accept: "Accept", adapt: "Adapt", reject: "Reject" } as const;
+    return <div className="feedback-choice">
+      <fieldset className="decision-field"><legend>Your decision</legend><div>
+        {(Object.keys(labels) as Array<keyof typeof labels>).map(action => <button key={action} type="button" aria-pressed={decision?.action === action} className={decision?.action === action ? "active" : ""} onClick={() => updateFeedbackDecision(index, { action: decision?.action === action ? "" : action })}>{labels[action]}</button>)}
+      </div></fieldset>
+    </div>;
   }
 
   async function reanalyzeSecondDraft() {
@@ -935,8 +980,9 @@ export default function CoachWorkspace() {
   }
 
   return <main className="workspace-shell"><header className="workspace-header"><Brand compact /><Progress stage={stage} helpMode={helpMode} /><div className="prototype-badge"><span /> English candidate</div></header><div className="workspace-body"><button className="back-button" type="button" onClick={goBack}><ArrowIcon back /> Back</button>
+    {path === "revision" && response && (stage === "feedback" || stage === "reflect") && Object.values(assignmentBrief).some(value => value.trim()) && <AssignmentReview key={JSON.stringify([stage, stage === "reflect" ? revisedDraft : draft, assignmentBrief])} brief={assignmentBrief} draft={stage === "reflect" ? revisedDraft : draft} language="en" headers={apiRequestHeaders} />}
     {stage === "setup" && <section className="flow-panel setup-panel"><div className="flow-heading"><p className="overline">Step 1 · Set your task</p><h1>{path === "practice" ? "Prepare a theme writing activity" : "How would you like AI to support you?"}</h1><p>{path === "practice" ? "Choose a topic context first. You decide the position and angle; the system uses the topic only to select relevant vocabulary." : "More direct support may be faster, but it also leaves fewer opportunities for you to think and revise independently."}</p></div>
-      {path === "practice" ? <div className="setup-columns"><fieldset className="choice-fieldset"><legend>Choose or describe a topic that interests you</legend><div className="topic-choices">{topics.map((item) => <button key={item.id} type="button" aria-pressed={topic === item.id} className={topic === item.id ? "active" : ""} onClick={() => selectTopic(item.id)}><span>{item.label}</span><small>{item.prompt}</small></button>)}</div>{topic === "custom" && <div className="custom-topic-fields"><label><span>Describe your direction <em>Required</em></span><textarea value={customTopic} maxLength={200} onChange={(event) => updateCustomTopic(event.target.value)} placeholder="For example: I want to discuss how short-video recommendations influence young people's tastes, choices and communities." /></label><label><span>Add the angle you want to explore <em>Optional</em></span><textarea value={customQuestion} maxLength={300} onChange={(event) => updateCustomQuestion(event.target.value)} placeholder="For example: I want to compare individual choice with platform influence." /></label><small>Use one to three sentences to describe any situation, relationship, experience or social issue. You do not need to name a formal topic. The system will match English target words without prescribing a question you must answer.</small></div>}</fieldset><fieldset className="choice-fieldset"><legend>Choose a level</legend><div className="level-choices">{levels.map((item) => <button key={item.id} type="button" aria-pressed={level === item.id} className={level === item.id ? "active" : ""} onClick={() => selectLevel(item.id)}><strong>{item.label}</strong><span>{item.count} target words</span><small>{item.description}</small></button>)}</div></fieldset></div> : <><section className="assignment-brief" aria-labelledby="assignment-brief-title"><div className="assignment-brief-heading"><div><span className="mini-step">Optional assignment context</span><h2 id="assignment-brief-title">Assignment Brief</h2><p>Keep the real task visible while you revise. These details are not sent to AI, so they cannot change the existing error-detection behaviour.</p></div><button className="secondary-button" type="button" onClick={copyTeacherTaskLink}>{taskLinkCopied ? "Task link copied" : "Copy teacher task link"}</button></div><div className="assignment-brief-fields"><label><span>Assignment title</span><input value={assignmentBrief.title} maxLength={120} onChange={(event) => updateAssignmentBrief("title", event.target.value)} placeholder="For example: Critical reflection on AI in education" /></label><label><span>Word limit</span><input value={assignmentBrief.wordLimit} inputMode="numeric" maxLength={5} onChange={(event) => updateAssignmentBrief("wordLimit", event.target.value)} placeholder="For example: 800" /></label><label className="wide"><span>Instructions or question</span><textarea value={assignmentBrief.instructions} maxLength={500} onChange={(event) => updateAssignmentBrief("instructions", event.target.value)} placeholder="Paste the assignment question or main instructions." /></label><label className="wide"><span>Marking criteria</span><textarea value={assignmentBrief.criteria} maxLength={500} onChange={(event) => updateAssignmentBrief("criteria", event.target.value)} placeholder="Add the criteria that you need to check while revising." /></label></div><small className="privacy-note">The shared link contains only these task settings—never a student draft, feedback or personal information.</small></section><fieldset className="choice-fieldset"><legend>Choose the level of support</legend><div className="help-grid">{helpModes.map((item, index) => <button key={item.id} type="button" aria-pressed={helpMode === item.id} className={`${helpMode === item.id ? "active" : ""} ${item.id === "rewrite" ? "editing-mode" : ""}`} onClick={() => setHelpMode(item.id)}><span className="mode-index">0{index + 1}</span><strong>{item.name}</strong><p>{item.description}</p><em>{item.learning}</em></button>)}</div></fieldset>{helpMode === "rewrite" && <div className="integrity-notice"><SparkIcon /><div><strong>This is editing mode, not learning mode</strong><p>AI will rewrite the full text without overwriting your draft or adding facts, data or citations that were not in it. Follow your course rules for AI use.</p></div></div>}</>}
+      {path === "practice" ? <div className="setup-columns"><fieldset className="choice-fieldset"><legend>Choose or describe a topic that interests you</legend><div className="topic-choices">{topics.map((item) => <button key={item.id} type="button" aria-pressed={topic === item.id} className={topic === item.id ? "active" : ""} onClick={() => selectTopic(item.id)}><span>{item.label}</span><small>{item.prompt}</small></button>)}</div>{topic === "custom" && <div className="custom-topic-fields"><label><span>Describe your direction <em>Required</em></span><textarea value={customTopic} maxLength={200} onChange={(event) => updateCustomTopic(event.target.value)} placeholder="For example: I want to discuss how short-video recommendations influence young people's tastes, choices and communities." /></label><label><span>Add the angle you want to explore <em>Optional</em></span><textarea value={customQuestion} maxLength={300} onChange={(event) => updateCustomQuestion(event.target.value)} placeholder="For example: I want to compare individual choice with platform influence." /></label><small>Use one to three sentences to describe any situation, relationship, experience or social issue. You do not need to name a formal topic. The system will match English target words without prescribing a question you must answer.</small></div>}</fieldset><fieldset className="choice-fieldset"><legend>Choose a level</legend><div className="level-choices">{levels.map((item) => <button key={item.id} type="button" aria-pressed={level === item.id} className={level === item.id ? "active" : ""} onClick={() => selectLevel(item.id)}><strong>{item.label}</strong><span>{item.count} target words</span><small>{item.description}</small></button>)}</div></fieldset></div> : <><section className="assignment-brief" aria-labelledby="assignment-brief-title"><div className="assignment-brief-heading"><div><span className="mini-step">Optional assignment context</span><h2 id="assignment-brief-title">Assignment Brief (optional)</h2><p>Just checking your own writing? Leave these fields blank and continue. Add details only if you have assignment requirements. After language feedback, separately check the assignment. Clicking check sends the current draft and these details to AI in one extra request.</p></div><button className="secondary-button" type="button" onClick={copyTeacherTaskLink}>{taskLinkCopied ? "Assignment link copied" : "Share assignment requirements"}</button></div><div className="assignment-brief-fields"><label><span>Assignment title</span><input value={assignmentBrief.title} maxLength={120} onChange={(event) => updateAssignmentBrief("title", event.target.value)} placeholder="For example: Critical reflection on AI in education" /></label><label><span>Word limit</span><input value={assignmentBrief.wordLimit} inputMode="numeric" maxLength={5} onChange={(event) => updateAssignmentBrief("wordLimit", event.target.value)} placeholder="For example: 800" /></label><label className="wide"><span>Instructions or question</span><textarea value={assignmentBrief.instructions} maxLength={500} onChange={(event) => updateAssignmentBrief("instructions", event.target.value)} placeholder="Paste the assignment question or main instructions." /></label><label className="wide"><span>Marking criteria</span><textarea value={assignmentBrief.criteria} maxLength={500} onChange={(event) => updateAssignmentBrief("criteria", event.target.value)} placeholder="Add the criteria that you need to check while revising." /></label></div><small className="privacy-note">The shared link contains only these task settings—never a student draft, feedback or personal information.</small></section><fieldset className="choice-fieldset"><legend>Choose the level of support</legend><div className="help-grid">{helpModes.map((item, index) => <button key={item.id} type="button" aria-pressed={helpMode === item.id} className={`${helpMode === item.id ? "active" : ""} ${item.id === "rewrite" ? "editing-mode" : ""}`} onClick={() => setHelpMode(item.id)}><span className="mode-index">0{index + 1}</span><strong>{item.name}</strong><p>{item.description}</p><em>{item.learning}</em></button>)}</div></fieldset>{helpMode === "rewrite" && <div className="integrity-notice"><SparkIcon /><div><strong>This is editing mode, not learning mode</strong><p>AI will rewrite the full text without overwriting your draft or adding facts, data or citations that were not in it. Follow your course rules for AI use.</p></div></div>}</>}
       {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={beginDraft} disabled={!canContinueSetup || isResolvingTopic}>{isResolvingTopic ? "Interpreting your writing direction…" : "Continue to your draft"} <ArrowIcon /></button></section>}
 
     {stage === "draft" && <section className="flow-panel draft-panel"><div className="flow-heading compact-heading"><p className="overline">Step 2 · Your first draft</p><h1>{path === "practice" ? "Write freely within this direction" : "Paste your own English draft"}</h1><p>{path === "practice" ? `Current direction: ${activeTopicLabel}. You choose the position. Aim for 80–150 words and use the target words naturally.` : "Remove names, student numbers and other personal information. AI will not overwrite your original draft."}</p></div>
@@ -944,17 +990,18 @@ export default function CoachWorkspace() {
       <label className="text-field draft-field"><span>English draft</span><textarea value={draft} readOnly={isGeneratingDemo} maxLength={path === "practice" ? 6000 : MAX_RAW_DRAFT_CHARACTERS} onChange={(event) => updateDraft(event.target.value)} placeholder="Type or paste your English here…" /><small className={(path === "practice" && draftWordCount >= 300) || (path === "revision" && draftNonWhitespaceCount >= 6000) ? "limit-reached" : ""}>{path === "practice" ? `${draftWordCount} / 300 words${draftWordCount >= 300 ? " · Limit reached" : ""}` : `${draftWordCount} words · ${draftNonWhitespaceCount} / 6000 non-whitespace characters${draftNonWhitespaceCount >= 6000 ? " · Limit reached" : ""}`} · Used only for this feedback session</small></label>
       <div className="draft-tools"><button className="secondary-button" type="button" disabled={isGeneratingDemo || isLoading} onClick={fillDemoDraft}>{isGeneratingDemo ? "Generating a new draft with this set of target words…" : path === "practice" ? "Add a demo draft for this direction (uses all target words)" : "Add a demo draft"}</button></div>
       {demoNotice && <p className="demo-status" role="status">{demoNotice}</p>}
-      {helpMode !== "rewrite" && <div className="self-check"><div><span className="mini-step">Before AI analysis</span><h2>Briefly assess your first draft</h2><p>Your assessment will be kept alongside the AI diagnosis so you can compare your judgement with external feedback and observe how your revision skills develop. The demo button above also fills in a sample response.</p></div><label><span>Summarise the central claim of this text.</span><input value={selfCheck.mainPoint} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, mainPoint: event.target.value })} placeholder="Write a brief summary" /></label><label><span>Which sentence is currently the clearest or most effective?</span><input value={selfCheck.strongest} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, strongest: event.target.value })} placeholder="Optional: paste a sentence from your draft" /></label><label><span>What most needs improvement in this draft?</span><select value={selfCheck.weakness} onChange={(event) => setSelfCheck({ ...selfCheck, weakness: event.target.value })}><option value="" disabled>Choose one assessment</option><option>The central claim is not sufficiently focused or clear</option><option>The argument needs stronger reasons or evidence</option><option>The structure is loose or connections between paragraphs are unclear</option><option>The academic register is inappropriate or too conversational</option><option>The vocabulary range is limited, vague or repetitive</option><option>Language accuracy needs work, including spelling, grammar or tense</option><option>Several areas need improvement; I would like a comprehensive diagnosis</option><option>I am not sure yet and would like AI feedback to help me decide</option></select></label><label><span>What should AI focus on in this session?</span><select value={goal} onChange={(event) => { setGoal(event.target.value); setSelfCheck({ ...selfCheck, help: event.target.value }); }}><option>Clarify and focus the central claim</option><option>Strengthen structure and logical connections between paragraphs</option><option>Improve academic register and precision</option><option>Develop the argument and explain evidence more fully</option><option>Check spelling, grammar and tense</option><option>Provide a comprehensive diagnosis</option></select></label></div>}
+      {helpMode !== "rewrite" && <div className="self-check"><div><span className="mini-step">Before AI analysis</span><h2>First-draft self-assessment (optional)</h2><p>You can leave every field blank and get AI feedback directly. If provided, your assessment will be kept alongside the AI diagnosis so you can compare your judgement with external feedback and observe how your revision skills develop. The demo button above also fills in a sample response.</p></div><label><span>Summarise the central claim of this text.</span><input value={selfCheck.mainPoint} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, mainPoint: event.target.value })} placeholder="Optional: write a brief summary" /></label><label><span>Which sentence is currently the clearest or most effective?</span><input value={selfCheck.strongest} maxLength={500} onChange={(event) => setSelfCheck({ ...selfCheck, strongest: event.target.value })} placeholder="Optional: paste a sentence from your draft" /></label><label><span>What most needs improvement in this draft?</span><select value={selfCheck.weakness} onChange={(event) => setSelfCheck({ ...selfCheck, weakness: event.target.value })}><option value="">Skip for now (optional)</option><option>The central claim is not sufficiently focused or clear</option><option>The argument needs stronger reasons or evidence</option><option>The structure is loose or connections between paragraphs are unclear</option><option>The academic register is inappropriate or too conversational</option><option>The vocabulary range is limited, vague or repetitive</option><option>Language accuracy needs work, including spelling, grammar or tense</option><option>Several areas need improvement; I would like a comprehensive diagnosis</option><option>I am not sure yet and would like AI feedback to help me decide</option></select></label><label><span>What should AI focus on in this session?</span><select value={goal} onChange={(event) => { setGoal(event.target.value); setSelfCheck({ ...selfCheck, help: event.target.value }); }}><option value="">No specific focus — check normally (optional)</option><option>Clarify and focus the central claim</option><option>Strengthen structure and logical connections between paragraphs</option><option>Improve academic register and precision</option><option>Develop the argument and explain evidence more fully</option><option>Check spelling, grammar and tense</option><option>Provide a comprehensive diagnosis</option></select></label></div>}
       {error && <p className="error-message" role="alert">{error}</p>}<button className="primary-button wide-action" type="button" onClick={requestFeedback} disabled={isLoading || isGeneratingDemo}>{isLoading ? "Analysing the draft…" : helpMode === "rewrite" ? "Generate a full academic rewrite" : "Analyse and locate issues"}<ArrowIcon /></button></section>}
 
-    {stage === "feedback" && response && <section className="flow-panel feedback-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Overall diagnosis</p><h1>What should you revise?</h1><p>{displaySummary(response)}</p></div><ProviderBadge response={response} />{response.feedback.length === 0 ? <><div className="integrity-notice"><CheckIcon /><div><strong>No reliably locatable issues found</strong><p>This does not guarantee that the text is perfect. You can return to refine the draft or finish this session; the system will not invent feedback to reach a quota.</p></div></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={() => setStage("draft")}>Return to the draft</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></> : <><div className="feedback-grid">{response.feedback.map((item, index) => <article className="feedback-card" key={`${item.category}-${index}`}><div className="feedback-card-top"><span>Issue {index + 1}</span><em>AI confidence: {confidenceLabels[item.confidence]}</em></div><h2>{displayCategory(item.category)}</h2><blockquote>Location: {item.quote}</blockquote><h3>Why this needs attention</h3><p>{displayWhy(item)}</p><h3>How to revise</h3><p className="correction-copy">{displayCorrection(item)}</p>{helpMode === "model" && item.suggestion && <details className="local-example"><summary>View a local revision example</summary><div><span>For reference only, not a replacement draft</span><p>{item.suggestion}</p></div></details>}</article>)}</div><section className="feedback-decision" aria-labelledby="feedback-decision-title"><div><span className="mini-step">Your judgement</span><h2 id="feedback-decision-title">Decide how to use one AI suggestion</h2><p>Choose one item, decide whether to accept, adapt or reject it, and explain why. This records your reasoning; it is not sent back to AI.</p></div><label><span>Feedback item</span><select value={feedbackDecision.issueIndex} onChange={(event) => setFeedbackDecision({ ...feedbackDecision, issueIndex: Number(event.target.value) })}>{response.feedback.map((item, index) => <option key={`${item.quote}-${index}`} value={index}>Issue {index + 1}: {displayCategory(item.category)}</option>)}</select></label><label><span>Your decision</span><select value={feedbackDecision.action} onChange={(event) => setFeedbackDecision({ ...feedbackDecision, action: event.target.value as FeedbackDecision["action"] })}><option value="" disabled>Choose one</option><option value="accept">Accept</option><option value="adapt">Adapt</option><option value="reject">Reject</option></select></label><label className="wide"><span>Why did you make this decision?</span><textarea value={feedbackDecision.reason} maxLength={500} onChange={(event) => setFeedbackDecision({ ...feedbackDecision, reason: event.target.value })} placeholder="For example: I will adapt this suggestion because the grammar correction is useful, but the proposed wording changes my intended meaning." /></label></section><div className="integrity-notice"><SparkIcon /><div><strong>Now revise the full text yourself</strong><p>{helpMode === "model" ? "Local examples only clarify individual issues; they do not complete the whole text for you. After you submit a second draft, all three versions will be kept for comparison." : "Revise the draft using the diagnosis above. After submission, the system will generate an academic version that addresses remaining issues and preserve your first and second drafts for comparison."}</p></div></div><button className="primary-button wide-action" type="button" disabled={!feedbackDecision.action || !feedbackDecision.reason.trim()} onClick={() => setStage("revise")}>View highlights and start revising <ArrowIcon /></button>{(!feedbackDecision.action || !feedbackDecision.reason.trim()) && <p className="second-check-note">Complete the decision above before moving to the second draft.</p>}</>}</section>}
+    {stage === "feedback" && response && <section className="flow-panel feedback-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Overall diagnosis</p><h1>What should you revise?</h1><p>{displaySummary(response)}</p></div><ProviderBadge response={response} />{response.feedback.length === 0 ? <><div className="integrity-notice"><CheckIcon /><div><strong>No reliably locatable issues found</strong><p>This does not guarantee that the text is perfect. You can return to refine the draft or finish this session; the system will not invent feedback to reach a quota.</p></div></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={() => setStage("draft")}>Return to the draft</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></> : <><p className="decision-guidance">Record decisions on as many suggestions as you like. Selections do not change your text automatically.</p><div className="feedback-grid">{displayFeedback.map((item, index) => <article className="feedback-card" key={`${item.category}-${index}`}><div className="feedback-card-top"><span>Issue {index + 1}</span><em>AI confidence: {confidenceLabels[item.confidence]}</em></div><h2>{displayCategory(item.category)}</h2><blockquote>Location: {item.quote}</blockquote><h3>Why this needs attention</h3><p>{displayWhy(item)}</p><h3>How to revise</h3><p className="correction-copy">{displayCorrection(item)}</p>{helpMode === "model" && item.suggestion && <details className="local-example"><summary>View a local revision example</summary><div><span>For reference only, not a replacement draft</span><p>{item.suggestion}</p></div></details>}{renderFeedbackDecision(index)}</article>)}</div><div className="integrity-notice"><SparkIcon /><div><strong>Now revise the full text yourself</strong><p>{helpMode === "model" ? "Local examples only clarify individual issues; they do not complete the whole text for you. After you submit a second draft, all three versions will be kept for comparison." : "Revise the draft using the diagnosis above. After submission, the system will generate an academic version that addresses remaining issues and preserve your first and second drafts for comparison."}</p></div></div><button className="primary-button wide-action" type="button" onClick={() => setStage("revise")}>View highlights and start revising <ArrowIcon /></button></>}</section>}
 
     {stage === "revise" && response && helpMode === "rewrite" && <section className="flow-panel revise-panel direct-rewrite-panel"><div className="flow-heading compact-heading"><p className="overline">Step 3 · Full rewrite</p><h1>Original draft and academic version</h1><p>AI has corrected the language and adjusted the academic register. Check that the revision preserves your intended meaning, facts and position.</p></div><div className="comparison-grid"><div className="version-pane locked"><div><span>Original draft</span><strong>{draftWordCount} words</strong></div><aside className="draft-highlight-legend"><i />Red underlining shows revised locations</aside><p><HighlightedDraft text={draft} feedback={response.feedback} /></p></div><article className="version-pane final direct-result"><div><span>Full academic rewrite</span><strong>{response.modelRevision.trim().split(/\s+/).filter(Boolean).length} words</strong></div><p>{response.modelRevision}</p></article></div><div className="ai-record editing-record"><div><SparkIcon /><span>Editing mode</span></div><p>This version was generated directly by AI and involves the least learner participation. Disclose AI use according to your course rules and verify the content yourself.</p></div><div className="finish-actions"><button className="secondary-button" type="button" onClick={async () => { await navigator.clipboard.writeText(response.modelRevision); setRecordCopied(true); }}>{recordCopied ? "Rewrite copied" : "Copy full rewrite"}</button><button className="primary-button" type="button" onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div></section>}
 
     {stage === "revise" && response && helpMode !== "rewrite" && <section className="flow-panel revise-panel">
       <div className="flow-heading compact-heading"><p className="overline">Step 4 · Revise it yourself</p><h1>Turn the feedback into your own second draft</h1><p>The original draft on the left highlights feedback locations in red; complete your revision on the right. {helpMode === "model" ? "Return to the previous page if you need to review a local example." : "The system will not rewrite the draft in advance."}</p></div>
       <ProviderBadge response={response} />
-      <div className="comparison-grid revision-comparison"><div className="version-pane locked interactive-original"><div><span>Original draft with issue locations</span><strong>{draftWordCount} words</strong></div><div className="issue-navigator" aria-label="Review each issue"><button type="button" onClick={() => showIssue((activeIssue ?? 0) - 1, true)} aria-label="Previous issue"><ArrowIcon back /></button><button type="button" className="issue-position" onClick={() => showIssue(activeIssue ?? 0, true)}>{activeIssue === null ? `View all ${response.feedback.length} issues` : `Issue ${activeIssue + 1} / ${response.feedback.length} · ${displayCategory(response.feedback[activeIssue]?.category || "")}`}</button><button type="button" onClick={() => showIssue((activeIssue ?? -1) + 1, true)} aria-label="Next issue"><ArrowIcon /></button></div><aside className="draft-highlight-legend"><i />Hover to view guidance; click to pin it while editing</aside><p className="interactive-draft-copy"><InteractiveHighlightedDraft text={draft} feedback={response.feedback} activeIssue={activeIssue} pinnedIssue={pinnedIssue} onShowIssue={setActiveIssue} onPinIssue={(index) => { if (pinnedIssue === index) dismissIssue(); else { setActiveIssue(index); setPinnedIssue(index); } }} onDismiss={dismissIssue} issueRefs={issueRefs} /></p></div><label className="version-pane editable"><div><span>Your second draft</span><strong>{path === "practice" ? `${revisedWordCount} / 300 words` : `${revisedWordCount} words · ${revisedNonWhitespaceCount} / 6000 non-whitespace characters`}</strong></div><textarea value={revisedDraft} maxLength={path === "practice" ? 6000 : MAX_RAW_DRAFT_CHARACTERS} onChange={(event) => updateRevisedDraft(event.target.value)} aria-label="Revised English text" /></label></div>
+      <div className="comparison-grid revision-comparison"><div className="version-pane locked interactive-original"><div><span>Original draft with issue locations</span><strong>{draftWordCount} words</strong></div><div className="issue-navigator" aria-label="Review each issue"><button type="button" onClick={() => showIssue((activeIssue ?? 0) - 1, true)} aria-label="Previous issue"><ArrowIcon back /></button><button type="button" className="issue-position" onClick={() => showIssue(activeIssue ?? 0, true)}>{activeIssue === null ? `View all ${response.feedback.length} issues` : `Issue ${activeIssue + 1} / ${response.feedback.length} · ${displayCategory(response.feedback[activeIssue]?.category || "")}`}</button><button type="button" onClick={() => showIssue((activeIssue ?? -1) + 1, true)} aria-label="Next issue"><ArrowIcon /></button></div><aside className="draft-highlight-legend"><i />Hover for guidance; click to pin and locate the matching passage</aside><p className="interactive-draft-copy"><InteractiveHighlightedDraft text={draft} feedback={displayFeedback} activeIssue={activeIssue} pinnedIssue={pinnedIssue} onShowIssue={setActiveIssue} onPinIssue={pinLinkedIssue} onDismiss={dismissIssue} issueRefs={issueRefs} /></p></div><div className="version-pane editable linked-revision-pane"><div><label htmlFor="revision-draft-input">Your second draft</label><strong>{path === "practice" ? `${revisedWordCount} / 300 words` : `${revisedWordCount} words · ${revisedNonWhitespaceCount} / 6000 non-whitespace characters`}</strong></div><LinkedRevisionEditor original={draft} value={revisedDraft} onChange={updateRevisedDraft} issue={pinnedIssue !== null && response.feedback[pinnedIssue] ? {index: pinnedIssue, quote: response.feedback[pinnedIssue].quote, sourceStart: linkedSourceStart} : null} navigationId={locationNavigationId} maxLength={path === "practice" ? 6000 : MAX_RAW_DRAFT_CHARACTERS} /></div></div>
+      <details className="revision-decisions"><summary>Review your feedback decisions · {feedbackDecisions.filter(item => item.action).length} / {response.feedback.length}</summary><p className="decision-guidance">You can change your decisions here. You do not need to select every suggestion.</p>{response.feedback.map((item, index) => <article key={index}><strong>Issue {index + 1} · {displayCategory(item.category)}</strong><blockquote>{item.quote}</blockquote>{renderFeedbackDecision(index)}</article>)}</details>
       {revisionError && <p className="error-message" role="alert">{revisionError}</p>}
       <button className="primary-button wide-action" type="button" disabled={isReanalyzing || countNonWhitespaceCharacters(revisedDraft) < 20} onClick={reanalyzeSecondDraft}>{isReanalyzing ? "Reanalysing the second draft…" : "Submit and reanalyse the second draft"} <ArrowIcon /></button>
       <p className="second-check-note">The system will recheck issues that remain and generate a final academic version based on your second draft.</p>
@@ -968,14 +1015,14 @@ export default function CoachWorkspace() {
         {revisionResponse.revisionComparison ? <div className="revision-audit-grid">
           <div><span>Initial diagnosis</span><strong>{revisionResponse.revisionComparison.initialCount}</strong><small>items</small></div>
           <div className="resolved"><span>Not detected again</span><strong>{revisionResponse.revisionComparison.resolved.length}</strong><small>items</small></div>
-          <div><span>Original issues remaining</span><strong>{revisionResponse.revisionComparison.remainingCount}</strong><small>items</small></div>
+          <div className="partial"><span>Partly revised</span><strong>{revisionResponse.revisionComparison.partialCount ?? 0}</strong><small>items</small></div><div><span>Original issues remaining</span><strong>{revisionResponse.revisionComparison.remainingCount}</strong><small>items</small></div>
           <div><span>Revised locations needing attention</span><strong>{revisionResponse.revisionComparison.changedCount}</strong><small>items</small></div>
-          <div><span>Additional findings</span><strong>{revisionResponse.revisionComparison.supplementalCount}</strong><small>items</small></div>
+          <div><span>Missed initially (found on recheck)</span><strong>{revisionResponse.revisionComparison.supplementalCount}</strong><small>items</small></div>
         </div> : <div className="revision-audit-grid legacy"><div><span>Initial diagnosis</span><strong>{response.feedback.length}</strong><small>items</small></div><div><span>Second-draft review</span><strong>{revisionResponse.feedback.length}</strong><small>items</small></div></div>}
-        <p>{revisionResponse.feedback.length === 0 ? "The independent recheck found no reliably locatable issues. You still need to verify the intended meaning and facts in the final version." : "The second draft was checked independently using the same standard. Labels below show whether an item is an original issue, a revised location needing attention or an additional finding."}</p>
+        <p>{revisionResponse.feedback.length === 0 ? "The independent recheck found no reliably locatable issues. You still need to verify the intended meaning and facts in the final version." : "The second draft was checked independently using the same standard. If an issue already existed in the original but was recognised only now, it is explicitly marked as an initial miss."}</p>
       </div>
       {revisionResponse.revisionComparison?.resolved.length ? <div className="resolved-issue-list"><h2>Original issues not detected again</h2>{revisionResponse.revisionComparison.resolved.map((item, index) => <span key={`${item.category}-${item.quote}-${index}`}><CheckIcon />{displayCategory(item.category)}: {item.quote}</span>)}</div> : null}
-      {revisionResponse.feedback.length > 0 && <div className="revision-review-list"><h2>Issues that still need attention</h2>{revisionResponse.feedback.map((item, index) => <article key={`${item.category}-${index}`}><div className="revision-issue-title"><strong>{index + 1}. {displayCategory(item.category)}</strong>{item.revisionStatus && <span className={`revision-status ${item.revisionStatus}`}>{item.revisionStatus === "remaining" ? "Original issue remains" : item.revisionStatus === "changed" ? "Revised location needs attention" : "Additional finding"}</span>}</div><blockquote>{item.quote}</blockquote><p>{displayCorrection(item)}</p></article>)}</div>}
+      {revisionResponse.feedback.length > 0 && <div className="revision-review-list"><h2>Issues that still need attention</h2>{revisionResponse.feedback.map((item, index) => <article key={`${item.category}-${index}`}><div className="revision-issue-title"><strong>{index + 1}. {displayCategory(item.category)}</strong>{item.revisionStatus && <span className={`revision-status ${item.revisionStatus}`}>{item.revisionStatus === "partial" ? "Partly revised" : item.revisionStatus === "remaining" ? "Original issue remains" : item.revisionStatus === "changed" ? "Revised location needs attention" : "Missed initially (found on recheck)"}</span>}</div><blockquote>{item.quote}</blockquote><div className="revision-repair-detail">{item.revisionProgress && <><p className="completed-edits"><strong>Completed: </strong>{item.revisionProgress.completed.map(displayEdit).join("; ")}</p><p><strong>Still to revise: </strong>{item.revisionProgress.pending.map(displayEdit).join("; ")}</p></>}<p>{displayCorrection(item)}</p></div></article>)}</div>}
       <div className="final-version-stack">
         <article className="version-pane locked"><div><span>Original draft</span><strong>{draftWordCount} words</strong></div><p>{draft}</p></article>
         <article className="version-pane locked"><div><span>Your second draft</span><strong>{revisedWordCount} words</strong></div>{revisionResponse.feedback.length > 0 && <aside className="draft-highlight-legend"><i />Red underlining shows issues that remain after rechecking</aside>}<p><HighlightedDraft text={revisedDraft} feedback={revisionResponse.feedback} /></p></article>
