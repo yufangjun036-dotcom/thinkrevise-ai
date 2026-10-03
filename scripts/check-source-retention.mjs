@@ -1,0 +1,27 @@
+// Replay a real response offline; these tests consume no API credits.
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import ts from 'typescript';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+let source = fs.readFileSync(new URL('../app/api/coach/route.ts', import.meta.url), 'utf8').replace(/^import .*;\n/gm, '');
+source += '\nexport {validateLiveResult, checkedSentenceFeedback, preserveOptionalCoordinatorComma, misreadsPersonalAiObservationAsUniversalClaim};';
+const sandbox = {exports:{}};
+new Function('exports','require','module',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(sandbox.exports,require,sandbox);
+const f = sandbox.exports;
+const draft = 'A famous 2025 study found that AI tutoring raises university pass rates by 60 percent. The study reportedly tested 4,000 students, but I cannot locate the original paper, its authors or the research method. I used an AI tutor for one month and my quiz score improved. Therefore, every university should immediately replace most lectures with this AI system because it is proven to work for all students.';
+const sourceIssue = {category:'学术建议 · 论证与证据',quote:draft,why:'缺少可核实来源与方法，不能支撑普遍结论。',correction:'请补充可核实的研究来源、作者与方法，或将结论收窄为与你实际证据相符的范围。',confidence:'高'};
+const scopeIssue = {category:'学术建议 · 论点聚焦',quote:draft.slice(draft.indexOf('Therefore')),why:'最后一句的范围明显超出前文证据能支持的主张。',correction:'收窄论点范围，而不是面向所有大学的绝对政策判断。',confidence:'高'};
+const output=f.validateLiveResult({feedback:[sourceIssue,scopeIssue]},draft,'coach',0,false,false);
+assert.ok(output.feedback.some(x=>x.correction.includes('研究来源')));
+assert.ok(output.feedback.some(x=>x.category.includes('论点聚焦')));
+assert.equal(f.validateLiveResult({feedback:[]},draft,'coach',0,false,false).feedback.length,0);
+assert.equal(f.misreadsPersonalAiObservationAsUniversalClaim({...sourceIssue,quote:'I used AI and my score improved.'}),true,'Protect bounded personal observations');
+const original='The study reportedly tested 4,000 students, but I cannot locate the original paper, its authors or the research method.';
+const revised=original.replace('authors or','authors, or');
+assert.equal(f.preserveOptionalCoordinatorComma(original,revised),original);
+assert.equal(f.preserveOptionalCoordinatorComma(revised,original),revised);
+assert.deepEqual(f.checkedSentenceFeedback([{index:0,replacement:revised,why:'The sentence is already grammatically correct and needs no change.',category:'语言准确性 · 句子完整性',confidence:'高'}],[original]),[]);
+assert.equal(f.preserveOptionalCoordinatorComma('Students left teachers stayed.','Students left; teachers stayed.'),'Students left; teachers stayed.');
+assert.equal(f.preserveOptionalCoordinatorComma(original,revised.replace('tested','tests')),revised.replace('tested','tests'),'Do not hide non-comma edits');
+console.log('Source retention and optional serial comma regression tests passed.');

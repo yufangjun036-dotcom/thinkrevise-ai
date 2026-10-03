@@ -63,14 +63,26 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function attachEnglishFeedback(item: FeedbackItem, index: number, translations: unknown): FeedbackItem {
+function attachEnglishFeedback(item: FeedbackItem, index: number, translations: unknown, draft = ""): FeedbackItem {
   if (!Array.isArray(translations)) return item;
   const matches = translations.filter(x => x && x.index === index);
   if (matches.length !== 1) return item;
   const translation = matches[0];
+  if (translation.sourceQuote !== undefined && translation.sourceQuote !== item.quote) return item;
   if (typeof translation.why !== "string" || typeof translation.correction !== "string"
     || !translation.why.trim() || !translation.correction.trim()
     || /[\p{Script=Han}]/u.test(translation.why + translation.correction)) return item;
+  // The model can confuse sentenceChecks indices with candidate indices.
+  // Reject copied draft text masquerading as actionable feedback.
+  const direction = translation.correction.trim();
+  if (direction === item.quote.trim() || (draft && draft.includes(direction) && direction.split(/\s+/).length >= 5)) return item;
+  // A blocked example must stay blocked in both presentation languages.
+  if (/未通过原文匹配或代入检查/.test(item.correction)
+    && !/withheld|not (?:a |an )?(?:validated|verified|safe|ready)|did not pass|failed.*(?:check|valid)|cannot.*(?:use|apply)/i.test(direction)) return item;
+  // Preserve the central scope diagnosis, rather than translating only a
+  // neighbouring source claim. This is a conservative check, not a semantic proof.
+  if (/普遍结论|普遍推广|所有大学|所有学生/.test(item.why)
+    && !/universal|generali[sz]|all (?:students|universities)|every university|overreach|overbroad|scope/i.test(translation.why)) return item;
   const originalEdits = concreteEdits(item);
   const translatedEdits = concreteEdits({ ...item, correction: translation.correction });
   if (originalEdits?.length && JSON.stringify(originalEdits) !== JSON.stringify(translatedEdits)) return item;
@@ -238,6 +250,11 @@ function preserveOptionalCoordinatorComma(before: string, after: string): string
   const listBefore = before.match(subjectList), listAfter = after.match(subjectList);
   if (listBefore && listAfter && listBefore[2] !== listAfter[2]
     && before.replace(subjectList, "$1 and $3") === after.replace(subjectList, "$1 and $3")) return before;
+  // Parallel, explicitly determined noun phrases at sentence end: an Oxford
+  // comma is optional. Do not generalise to appositions or clause boundaries.
+  const objectList = /((?:the|a|an|its|their|our|my) [a-z]+(?: [a-z]+){0,2}, (?:the|a|an|its|their|our|my) [a-z]+(?: [a-z]+){0,2})(,?)( (?:and|or) (?:the|a|an|its|their|our|my) [a-z]+(?: [a-z]+){0,2}[.!?]?)$/i;
+  if (objectList.test(before) && objectList.test(after)
+    && before.replace(objectList, "$1$3") === after.replace(objectList, "$1$3")) return before;
   const parts = (text: string) => {
     if (text.split(/\s+/).length > 24 || /[;:()\[\]"“”]/.test(text)) return null;
     if ((text.match(/\band\b/gi) ?? []).length !== 1) return null;
@@ -1218,6 +1235,11 @@ function feedbackQuotesOverlap(first: string, second: string, firstCategory = ""
 // Category names alone are not stable identities. Cross-category discourse
 // matching additionally requires the same passage and the same advice intent.
 function sameRevisionFinding(old: FeedbackItem, current: FeedbackItem) {
+  // Shared evidence words and overlapping passages do not make source
+  // verification and narrowing a conclusion the same learning action.
+  const requestsSource = (item: FeedbackItem) => item.category.startsWith("学术建议")
+    && /(?:补充|提供|核实|核查|查找|注明)[^。；]{0,30}(?:来源|原始论文|作者)|(?:verify|provide|cite|locate|check)[^.!;]{0,50}(?:source|original paper|citation)/i.test(item.correction);
+  if (requestsSource(old) !== requestsSource(current)) return false;
   const forward = editCoverage(current, [old]);
   const reverse = editCoverage(old, [current]);
   if (forward?.covered.every(Boolean) || reverse?.covered.every(Boolean)) return true;
@@ -1723,7 +1745,7 @@ function rejectsSpeculativeAcademicAdviceInShortAiReflection(item: FeedbackItem,
     || isStructurallyOverbroadThesis(item, draft)
     || isStructurallyStrongRegisterAdvice(item, draft)) return false;
   const directlyVisibleHighRiskClaim = /\b(?:all|always|never|everyone|no one|must immediately|should immediately|proves?)\b/i.test(item.quote)
-    || /\b\d+(?:\.\d+)?%\b/i.test(item.quote)
+    || /\b\d+(?:\.\d+)?(?:\s*(?:percent|per cent)\b|%(?!\w))/i.test(item.quote)
     || /\bbecause it is important\b/i.test(item.quote)
     || (/\b(?:therefore|consequently|thus)\b[^.!?]*\b(?:caused?|proved?)\b/i.test(item.quote)
       && /因果|caus/i.test(`${item.why} ${item.correction}`));
@@ -1739,7 +1761,10 @@ function misreadsPersonalAiObservationAsUniversalClaim(item: FeedbackItem) {
   const personalOutcome = /\bmy\s+(?:own\s+)?(?:writing|work|essay|draft|score|experience)\b/i.test(quote);
   const firstPersonObservation = /\b(?:I|my|we|our)\b/i.test(quote);
   const wronglyTreatsItAsUniversal = /(?:所有|任何|普遍|普适|普遍规律|所有情况下|扩大到)|\b(?:universal|all cases|general(?:ise|ize|isation|ization))\b/i.test(feedbackText);
-  return firstPersonObservation && personalOutcome && wronglyTreatsItAsUniversal;
+  // A personal anecdote may coexist with an explicit universal conclusion.
+  // This safeguard only rejects an inference the author did NOT make.
+  const explicitUniversalClaim = /\b(?:all students|every university|everyone|always|all universities)\b/i.test(quote);
+  return firstPersonObservation && personalOutcome && wronglyTreatsItAsUniversal && !explicitUniversalClaim;
 }
 
 function quoteSentence(draft: string, quote: string) {
@@ -2498,6 +2523,7 @@ function validateLiveResult(value: unknown, draft: string, mode: HelpMode, minim
 
 const feedbackFidelityInstruction = "\n代词检查必须先在前文寻找合理指代对象：its 可以指前一句的 AI 或 tool，不能因为当前句主语为复数 students 就强制改成 their；不确定指代时不要报告为确定语法错误。复核返回的 approved 数组必须与 reason 一致：认定真实、必要且可执行的问题应加入 approved，不能一面批准解释一面返回空数组。反馈解释必须与实际修正一致：已有主语和谓语但动词屈折不一致，应解释为主谓一致，不得称句子残缺。学术证据不足不证明相反立场成立：不得把 should 改成 should not，或将支持替换成反对。学术反馈优先给出补充依据、限定范围和条件的操作方向，而不是替作者写出新的结论。完整改写也须保留立场方向；无法在不新增事实或立场的情况下安全改写时，保留该句并在反馈中指出仍需作者处理，不要强行修好。\n表达精确性检查须阅读全文寻找所指对象和分类范围：other/such/these 加概括名词可以自然承接前文的多个例子，不要求每次列全。已有合理指代或范围时，不得孤立引文想象另一种解释并判模糊。只有确实妨碍理解、上下文不能消解的歧义才报告，不能只以‘可更具体’为理由。替换必须保持对象类型，不能把地点改成活动、把人员改成服务或把记录改成结果；若作者未提供具体对象，不替其猜测。学术语域建议仍须有实质理解障碍，不把普通而清楚的概括词当错。"
   + "\n所有格限定词与其后名词不存在机械的单复数一致规则：their/our 可以修饰单数、不可数、共同所有或分配性名词。须按所指数量与上下文判断，不得仅凭所有者为复数就要求被修饰名词复数。量度某种属性的单数和列举各个数值的复数可能都成立，不能把可选表达判错；但 many、数词等明确数量限制仍须检查。sentenceChecks 的 why 必须描述实际 replacement：原文合理而保持不变时明确说明无需修改，不能同时宣称必须修正。"
+  + "\n来源提醒只针对把未经核实的信息用作结论依据的实质缺口。若作者已明确写成 website claims 并承认无法核实，不要再要求给这个转述加同样的归属标签，也不要把承认局限的句子本身判错；若后文仍把它作为已证实的普遍结论，定位后文并解释来源与推断范围的问题。同一个研究来源缺口只给一条反馈，不按研究数值、作者、方法分别重复。说明上下文时优先用‘文中’或‘上下文’（in the draft / the surrounding text）；只有实际核对了先后位置才说上一句/下一句。"
   + "\n区分规范性建议与经验性普遍结论：建议读者思考、检查、比较或谨慎作决定，不等于声称所有人都具有某种特征或某措施必然有效。泛指学生等群体的普通实用建议不因主语为泛指复数就构成过度概括；仅以范围略宽或并非所有人为由不得批准。仍应审查强制性普遍政策、无依据的因果效果和保证性结论。"
   + "\n普通行动理由不是实验因果结论：作者说明某种现实需要或不足，因此安排补充帮助、联系方式、说明或工具，这是可合理推知的目的与行动关系，不是在宣称行动已产生某种可测量效果。不能仅因用了 so/because/therefore 就要求证据、机制或逐字解释常识性联系。审核论证建议时先区分‘为什么这样安排’与‘这样安排已经导致学习成绩等结果’，只有后者需要相应效果证据。若修改仅添加 as extra information 等显而易见的用途，原文没有真实理解障碍，则拒绝反馈并保持原句；但明确宣称某安排必然提升成绩或解决所有问题仍需核对依据。"
   + "\n跨句时间范围：过去经历后的 next time 等标记会开启未来计划，后续 also 承接的计划仍在此范围。would 可能表达设想或委婉建议，而非过去时间标记；不得仅因主句有 would，就把 before/after/when 时间从句的一般现在时改成过去时。结合前文区分尚未发生的安排、假设条件与过去叙述；两种时态均可表达作者意图时保留原文，不为机械时态一致而报错。";
@@ -2968,6 +2994,8 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
     ? "\n每句先填写 meaningToPreserve：简述原句的主体、动作、时间指向、情态/否定、数量与限定人群；这是内容核对摘要，不是推理过程。然后才填写 replacement，逐项保留这些意义。只做修复明确语言错误所必需的最小改动，不顺带润色。特别保留 will/would/can/could/may/might/must/should，不得把带情态的预测改成一般现在时事实，不得无依据增强或削弱语气；情态后动词形式错误只改动词，不删除情态词。保留 not/never/only/some/all、数值、比较方向、before/after/if 等限制。时态要修正错误形式但保留原时间指向，不把 last week 变成现在、不把未来变为习惯；没有明确依据时不强行统一全文为过去时。限定某一子群体的从句不可改成两个并列事实。保持原有主句与修饰关系，不将 larger（大小）换成 more（数量）。同一对象的单复数处理需参考后续代词；若后文用 it 指代同一概念，避免前句改为复数处理而后句保留 it。对修改后句子再次核对上述内容。无法确定的歧义不擅自消除。why 仅解释实际发生的修改，不把未改动词语列为修改。"
     : "";
   const cohesionReviewInstruction = baseCohesionReviewInstruction + cohesionEvidenceInstruction + draftLayoutInstruction + sentenceReviewInstruction + sentenceMeaningInstruction
+    + "\nPossessive determiners its/their/our may directly precede nouns (its authors, their findings). This is not a missing possessive construction. Expanding a clear pronoun into a named possessor is optional, not grammar repair. In parallel noun phrases, the and its need not be identical when their references are already clear. If proposing only optional clarification, leave replacement unchanged and explicitly state no necessary correction."
+    + "\nEnglish presentation IDs refer ONLY to input.candidates, never input.sentences or languageCandidates. For each translation, copy candidates[index].quote EXACTLY into sourceQuote, and translate only that candidate's why and correction. A candidate about an unsupported policy must retain that policy scope in English. Do not replace its diagnosis with a neighbouring source or language issue. Translate any withheld-example warning faithfully rather than supplying a new example."
     + "\n描述结果不等于声称因果：单纯报告分数、人数、均值或观察值的变化，并未自行断言谁导致了变化。因果类候选必须指出原文实际存在的因果主张或跨句推断，不能替作者假设一个更强结论再批评它。若当前全文已明确区分分数变化与因果、说明局限，则拒绝要求在普通结果句后重复添加同一免责声明的候选。复检只能依据当前稿，不能因第一稿曾有强因果断言，就把其残留的正常事实描述仍当作因果错误。若存在真实的来源缺失或明确未经支持的因果断言，仍可按其实际缺口提示。"
     + "\n论证与证据的边界：研究诚信、谨慎陈述、如实报告局限、避免夸大结论等规范性写作建议，不等于声称某干预提高了可测量的成绩或效率。即使使用 better、more useful 等比较措辞，也不能仅凭比较级就认定为需要数据证明的经验性评价。先从全文确认比较的对象：若是在诚实/谨慎表述与不受证据支持的夸大之间作原则性选择，应拒绝仅要求加范围词或引用的候选。若确实承诺具体学习效果、数值优势或对所有人的真实效果，则仍核查其依据；不要用本规则放过实际因果或数量断言。"
     + (goalIndexes.length ? "\ninput.goalIndexes 中每个候选必须填写一个 goalReviews，不得用空字符串占位。goalQuote 从全文摘录实际目标（也可摘录前文解释目标的短语），actionAndGoalRelation 简短说明行为与该目标的关系。若找不到目标，只让 goalQuote 为空，同时用 actionAndGoalRelation 说明信息不足。verdict 是该候选反馈是否成立，不是原句是否正确：拒绝候选写 reject，批准候选写 approve。approved 中包含且仅包含 verdict 为 approve 的候选；reason 也须一致。目标定义本身的符合关系无需额外实证研究，不应仅弱化语气。" : "")
@@ -3016,7 +3044,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
       text: { format: { type: "json_schema", name: "feedback_review", strict: true, schema: {
         type: "object", additionalProperties: false,
         properties: {
-          englishFeedback: { type: "array", items: { type: "object", additionalProperties: false, properties: { index: { type: "integer" }, why: { type: "string" }, correction: { type: "string" } }, required: ["index", "why", "correction"] } },
+          englishFeedback: { type: "array", items: { type: "object", additionalProperties: false, properties: { index: { type: "integer" }, sourceQuote: { type: "string" }, why: { type: "string" }, correction: { type: "string" } }, required: ["index", "sourceQuote", "why", "correction"] } },
           ...(goalIndexes.length ? { goalReviews: { type: "array", minItems: goalIndexes.length, maxItems: goalIndexes.length, description: "先核对目标关系，再决定approved。对目标定义本身的符合/不符合判断，不要求效果研究；只有依赖未经证明的现实效果才按经验结论审查。",
             items: { type: "object", additionalProperties: false, properties: {
               index: { type: "integer", enum: goalIndexes },
@@ -3149,7 +3177,17 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
       }
     }
   }
-  const feedback = [...candidates.flatMap((item, index) => approved.has(index) && (!sentences.length || !item.category.startsWith("语言")) ? [attachEnglishFeedback(item, index, decision.englishFeedback)] : []), ...languageFeedback];
+  const translatedCandidates = candidates.map((item, index) => attachEnglishFeedback(item, index, decision.englishFeedback, draft));
+  const translationErrors = candidates.flatMap((item, index) => approved.has(index)
+    && (!sentences.length || !item.category.startsWith("语言"))
+    && Array.isArray(decision.englishFeedback) && decision.englishFeedback.some(entry => entry?.index === index)
+    && (!translatedCandidates[index].whyEnglish || !translatedCandidates[index].correctionEnglish)
+    ? [`English presentation for candidate ${index} is missing or inconsistent. Translate THIS candidate's why and correction, not sentenceChecks[${index}]. Preserve its scope diagnosis and any warning that the replacement was withheld. Do not return unchanged draft text as correction.`] : []);
+  if (translationErrors.length) {
+    if (retryIssues) throw new MeaningPreservationError("English feedback validation failed", translationErrors, decision);
+    return reviewCandidateFeedback(value, draft, apiKey, signal, trace, translationErrors);
+  }
+  const feedback = [...translatedCandidates.filter((item, index) => approved.has(index) && (!sentences.length || !item.category.startsWith("语言"))), ...languageFeedback];
   if (result.modelRevision) {
     const assembled = assembleReviewedLanguageRevision(draft, feedback);
     if (assembled !== null) return { ...result, feedback, modelRevision: assembled };

@@ -120,14 +120,34 @@ const pluralNumberDraft='A number of students is waiting outside.';
 assert.ok(f.validateLiveResult({feedback:[],modelRevision:pluralNumberDraft},pluralNumberDraft,'coach',0,false).feedback.some(item=>item.quote==='students is'),'A number of takes plural agreement; do not suppress it like the number of');
 const result = (feedback, draft) => ({ summary: '测试', feedback, modelRevision: draft, overview: [], meaningRisk: '' });
 const englishCaseOne = 'Many student use AI tool for university assignment. Last week, I ask an AI chatbot write two paragraph for my presentation, and it give me several useful idea. However, the information not match our course requirement. My tutor said students need check AI answer carefully before submit their work.';
-const englishCaseOneOutput = f.validateLiveResult(result([], englishCaseOne), englishCaseOne, 'coach', 0, false);
+// This is an offline validation/retention test, not an AI detection test.
+// Supply the candidate feedback whose survival this layer is responsible for.
+const englishCaseOneCandidates = [
+  issue('Many student use AI tool', 'Many student use AI tool → many students use AI tools', '语言准确性 · 名词单复数'),
+  issue('university assignment', 'university assignment → university assignments', '语言准确性 · 冠词与名词形式'),
+  issue('I ask an AI chatbot write two paragraph', 'I ask an AI chatbot write two paragraph → I asked an AI chatbot to write two paragraphs', '语言准确性 · 时态与动词形式'),
+  issue('it give me several useful idea', 'it give me several useful idea → it gave me several useful ideas', '语言准确性 · 综合语言修改'),
+  issue('the information not match our course requirement', 'the information not match our course requirement → the information did not match our course requirements', '语言准确性 · 综合语言修改'),
+  issue('need check AI answer carefully before submit', 'need check AI answer carefully before submit → need to check AI answers carefully before submitting', '语言准确性 · 时态与动词形式'),
+];
+const englishCaseOneOutput = f.validateLiveResult(result(englishCaseOneCandidates, englishCaseOne), englishCaseOne, 'coach', 0, false, false);
 const englishCaseOneCorrections = englishCaseOneOutput.feedback.map(item => item.correction).join(' ');
 for (const expected of ['many students use AI tools', 'university assignments', 'asked an AI chatbot to write two paragraphs', 'it gave me several useful ideas', 'did not match our course requirements', 'need to check AI answers carefully before submitting']) {
   assert.ok(englishCaseOneCorrections.includes(expected), `English live case must preserve correction: ${expected}`);
 }
 const englishAcademicCase = 'A famous 2025 study found that AI tutoring raises university pass rates by 60 percent. The study reportedly tested 4,000 students, but I cannot locate the original paper, its authors or the research method. I used an AI tutor for one month and my quiz score improved. Therefore, every university should immediately replace most lectures with this AI system because it is proven to work for all students.';
-const englishAcademicOutput = f.validateLiveResult(result([], englishAcademicCase), englishAcademicCase, 'coach', 0, false);
-assert.equal(englishAcademicOutput.feedback.filter(item => item.category === '学术建议 · 论证与证据').length, 2, 'English academic case must flag both unverifiable evidence and the unsupported universal policy');
+const englishAcademicCandidates = [
+  {...issue('A famous 2025 study found that AI tutoring raises university pass rates by 60 percent.', '找到原始研究并核实来源；无法核实时不要把这项统计作为已证实的依据。', '学术建议 · 论证与证据'), why:'这项具体统计缺少可核实的原始来源，后文承认无法找到原始论文、作者和研究方法。'},
+  {...issue('Therefore, every university should immediately replace most lectures with this AI system because it is proven to work for all students.', '收窄从个人经历推广到所有学生的结论，不虚构普遍有效的证据。', '学术建议 · 论证与证据'), why:'个人一个月的经历不能支持所有大学立即替代大部分课程和对所有学生有效的结论。'},
+];
+const englishAcademicOutput = f.validateLiveResult(result(englishAcademicCandidates, englishAcademicCase), englishAcademicCase, 'coach', 0, false, false);
+assert.equal(englishAcademicOutput.feedback.filter(item => item.category === '学术建议 · 论证与证据').length, 2, 'Offline validator must retain both supplied evidence concerns, not generate a diagnosis from empty AI feedback');
+for (const percentage of ['60%', '60 percent', '60 per cent', '12.5%', '12.5 percent']) {
+  const draft = englishAcademicCase.replace('60 percent', percentage);
+  const candidate = {...englishAcademicCandidates[0], quote:englishAcademicCandidates[0].quote.replace('60 percent', percentage)};
+  assert.equal(f.validateLiveResult(result([candidate], draft), draft, 'coach', 0, false, false).feedback.length, 1, `Source concerns must survive short-reflection filtering for ${percentage}`);
+  assert.equal(f.validateLiveResult(result([], draft), draft, 'coach', 0, false, false).feedback.length, 0, 'A percentage alone must not manufacture a source accusation');
+}
 const registerEvaluatorDraft = 'We looked at how the drug works in liver cells. The thing we found is that low dose can slow down cell aging. Lots of earlier studies also got similar results. We think this finding is pretty useful. It tells us that natural compounds may help protect cells from damage. We will do more tests later to check if this idea holds.';
 const registerEvaluatorReplay = f.validateLiveResult(result([], registerEvaluatorDraft), registerEvaluatorDraft, 'coach', 0, false);
 const lowDoseIssue = registerEvaluatorReplay.feedback.find(item => item.quote === 'low dose');
@@ -471,7 +491,8 @@ try {
     const reviewInput=JSON.parse(body.input);
     assert.deepEqual(reviewInput.candidates.map(item=>item.index),reviewInput.candidates.map((_,index)=>index),'Reviewer candidates carry explicit zero-based IDs');
     assert.match(body.instructions,/不要假设未出现的分段/,'Coherence review must use actual context');
-    return Response.json({output_text:JSON.stringify({approved:[],reason:'No necessary changes',modelRevision:preservedMeaning})});
+    return Response.json({output_text:JSON.stringify({approved:[],reason:'No necessary changes',modelRevision:preservedMeaning,
+      cohesionReviews:reviewInput.candidates.filter(item=>item.category==='学术建议 · 衔接与连贯').map(item=>({index:item.index,verdict:'reject',relationEvidence:'Mock semantic reviewer rejects this candidate; lexical mismatch alone is not proof.',reason:'Exercise the reviewer veto contract, not actual model judgement.'}))})});
   };
   const rejected=await f.reviewCandidateFeedback(result([issue('just one','删除 just','学术语气')],preservedMeaning),preservedMeaning,'test-placeholder',new AbortController().signal);
   assert.equal(rejected.feedback.length,0);
@@ -510,7 +531,7 @@ try {
   const connectedCandidate={...mislabeledAbrupt,quote:connectedDraft,category:'学术建议 · 衔接与连贯'};
   const connectedResult=await f.reviewCandidateFeedback(result([connectedCandidate],connectedDraft),connectedDraft,'test-placeholder',new AbortController().signal);
   assert.equal(connectedResult.feedback.length,0,'An explicitly connected sentence pair is not protected as a topic shift');
-  globalThis.fetch=async () => Response.json({output_text:JSON.stringify({approved:[0],reason:'The two subjects are unrelated in this context',modelRevision:abruptDraft})});
+  globalThis.fetch=async () => Response.json({output_text:JSON.stringify({approved:[0],reason:'The two subjects are unrelated in this context',modelRevision:abruptDraft,cohesionReviews:[{index:0,verdict:'approve',relationEvidence:'Waste reduction and data governance are presented without a shared purpose or transition.',reason:'The supplied adjacent sentences do not explain their relationship.'}]})});
   const confirmedAbrupt=await f.reviewCandidateFeedback(result(abruptValidated.feedback,abruptDraft),abruptDraft,'test-placeholder',new AbortController().signal);
   assert.equal(confirmedAbrupt.feedback.length,1,'A semantically confirmed topic shift must remain available');
   globalThis.fetch=async () => Response.json({output_text:JSON.stringify({approved:[999],reason:'bad',modelRevision:''})});
