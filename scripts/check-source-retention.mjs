@@ -5,7 +5,7 @@ import ts from 'typescript';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 let source = fs.readFileSync(new URL('../app/api/coach/route.ts', import.meta.url), 'utf8').replace(/^import .*;\n/gm, '');
-source += '\nexport {validateLiveResult, checkedSentenceFeedback, preserveOptionalCoordinatorComma, misreadsPersonalAiObservationAsUniversalClaim};';
+source += '\nexport {validateLiveResult, checkedSentenceFeedback, preserveOptionalCoordinatorComma, misreadsPersonalAiObservationAsUniversalClaim, buildUnverifiableResearchClaimFeedback};';
 const sandbox = {exports:{}};
 new Function('exports','require','module',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(sandbox.exports,require,sandbox);
 const f = sandbox.exports;
@@ -13,6 +13,17 @@ const draft = 'A famous 2025 study found that AI tutoring raises university pass
 const sourceIssue = {category:'学术建议 · 论证与证据',quote:draft,why:'缺少可核实来源与方法，不能支撑普遍结论。',correction:'请补充可核实的研究来源、作者与方法，或将结论收窄为与你实际证据相符的范围。',confidence:'高'};
 const scopeIssue = {category:'学术建议 · 论点聚焦',quote:draft.slice(draft.indexOf('Therefore')),why:'最后一句的范围明显超出前文证据能支持的主张。',correction:'收窄论点范围，而不是面向所有大学的绝对政策判断。',confidence:'高'};
 const output=f.validateLiveResult({feedback:[sourceIssue,scopeIssue]},draft,'coach',0,false,false);
+assert.ok(f.buildUnverifiableResearchClaimFeedback(draft));
+for(const percentage of ['27%', '12.5 percent', '42 per cent']) {
+ const changed=draft.replace('2025','2023').replace('60 percent',percentage).replace('AI tutoring','online practice');
+ assert.ok(f.buildUnverifiableResearchClaimFeedback(changed),percentage);
+}
+for(const safe of [
+ 'A study found that scores improved by 25 percent. The study provides its original paper and research method.',
+ 'A website claims that a study found a 25 percent improvement. I cannot find the original paper.',
+ 'A study found that scores improved by 25 percent. I cannot find the original paper. I do not treat this claim as established evidence.',
+ 'A study found that scores improved by 25 percent.\n\nI cannot find the original paper for an unrelated assignment.',
+]) assert.equal(f.buildUnverifiableResearchClaimFeedback(safe),null,safe);
 assert.ok(output.feedback.some(x=>x.correction.includes('研究来源')));
 assert.ok(output.feedback.some(x=>x.category.includes('论点聚焦')));
 assert.equal(f.validateLiveResult({feedback:[]},draft,'coach',0,false,false).feedback.length,0);

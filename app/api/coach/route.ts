@@ -1000,6 +1000,30 @@ function buildUnsupportedExperimentProofFeedback(draft: string): FeedbackItem | 
 }
 
 function buildUnverifiableResearchClaimFeedback(draft: string): FeedbackItem | null {
+  // Only protect an explicit contradiction in the draft, not a missing
+  // citation inferred from a number alone. Work within one paragraph.
+  for (const paragraph of draft.split(/\n\s*\n/)) {
+    const sentences = Array.from(new Intl.Segmenter("en", { granularity: "sentence" }).segment(paragraph));
+    for (let i = 0; i < sentences.length; i++) {
+      const claim = sentences[i].segment.trim();
+      if (!/\b(?:study|research|survey|trial)\b[^.!?]*\b(?:found|shows?|reported|demonstrated)\b/i.test(claim)
+        || !/\b\d+(?:\.\d+)?(?:\s*(?:percent|per cent)\b|%)/i.test(claim)
+        || /\b(?:claims?|alleges?|unverified|unconfirmed|reportedly|according to)\b/i.test(claim)) continue;
+      const next = sentences[i + 1]?.segment.trim() ?? "";
+      if (!/^(?:(?:the|this) (?:study|research|survey|trial)|(?:however,? )?(?:I|we|its|the original paper))\b/i.test(next)
+        || !/\b(?:cannot|can't|could not|couldn't|unable to)\s+(?:find|locate|verify|access)\b[^.!?]*\b(?:original (?:paper|study|source)|authors?|research method)\b/i.test(next)) continue;
+      const context = sentences.slice(i, i + 4).map(s => s.segment).join('');
+      if (/\b(?:do not|cannot|can't)\s+(?:treat|use|rely on|draw)|\bnot (?:verified|established) evidence\b/i.test(context)) continue;
+      return {
+        category: "学术建议 · 论证与证据", quote: paragraph.slice(sentences[i].index, sentences[i + 1].index + sentences[i + 1].segment.length).trim(),
+        why: "文中把具体研究比例作为事实陈述，同时明确说明无法找到或核实原始来源。应区分未经核实的转述与可作为结论依据的证据；这不表示该数据已被证实为假。",
+        correction: "核查并提供原始来源；核实前请明确标为未经核实的转述，不要把该数据作为已证实的结论依据。无法核实且非必要时，可考虑删除该数据。",
+        whyEnglish: "The draft presents a numerical research finding as fact while explicitly saying that its original source cannot be located or verified. Distinguish an unverified report from evidence supporting a conclusion; this does not establish that the statistic is false.",
+        correctionEnglish: "Check and provide the original source. Until verified, label the finding as an unverified report and do not use it as established evidence. Consider removing the statistic if it cannot be verified and is not necessary.",
+        question: "", hints: [], suggestion: "", confidence: "高",
+      };
+    }
+  }
   const groupSeven = draft.match(/I read a paper online:\s*[^.!?]*\b\d+(?:\.\d+)?%[^.!?]*[.!?]\s*But the paper[^.!?]*(?:sample size|reference)[^.!?]*[.!?]?/i);
   const groupTen = draft.match(/A famous research[^.!?]*\b\d+(?:\.\d+)?%[^.!?]*[.!?]\s*The researcher[^.!?]*\b\d+\s+student[^.!?]*cannot find the original paper[^.!?]*[.!?]?/i);
   const finalBlind = draft.match(/A famous 2024 study[^.!?]*\b\d+(?:\.\d+)?\s*percent[^.!?]*[.!?]\s*The research[^.!?]*\b\d+\s+learners?[^.!?]*[.!?]\s*I found this result on a blog, but no original paper or author reference is available[.!?]?/i);
