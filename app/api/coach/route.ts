@@ -817,7 +817,7 @@ function findLanguageIssues(draft: string): FeedbackItem[] {
       const start = clause.index ?? 0;
       const prefix = sentence.slice(0, start).trim();
       if (!prefix || !/\b(?:am|is|are|was|were|do|does|did|has|have|had|can|could|should|would|will|may|might|must|[a-z]+(?:ed|s))\b/i.test(prefix)) continue;
-      if (/\b(?:and|but|so|yet|because|although|while|when|whenever|if|since|unless|until|before|after|that|whether|how|why|where|as)(?:\s+(?:each|every|some|all|the|these|those))?\s*$/i.test(prefix)) continue;
+      if (/\b(?:and|but|so|yet|because|although|while|when|whenever|if|since|unless|until|before|after|that|whether|how|why|where|as|than)(?:\s+(?:each|every|some|all|the|these|those))?\s*$/i.test(prefix)) continue;
       if (/\b(?:ensure|ensures|help|helps|allow|allows|enable|enables|require|requires|encourage|encourages|expect|expects|show|shows|suggest|suggests|indicate|indicates|mean|means|find|finds|believe|believes|argue|argues|report|reports)\s+(?:\w+\s+){0,3}$/i.test(prefix)) continue;
       found.push({
         category: "语言准确性 · 连写句",
@@ -2879,6 +2879,26 @@ function meaningAnchors(text: string): string[] {
   return (normalized.match(/\b(?:free|paid|unpaid|will|would|can|could|may|might|must|should|not|never|no|only|some|all|every|each|if|before|after|two|three|four|five|six|seven|eight|nine|ten)\b|\b\d+(?:[.,]\d+)*\b/g) ?? []).sort();
 }
 
+function progressiveAspectIssues(before: string, after: string): string[] {
+  // Agreement repairs must not silently turn an ongoing action into a habit.
+  // Exclude common stative constructions: these may genuinely need simple tense.
+  const actions = (text: string) => [...text.matchAll(/\b(am|is|are|was|were)\s+(?:not\s+)?([a-z]+ing)\b/gi)]
+    .filter(match => !/^(?:knowing|believing|owning|belonging|needing|wanting|meaning)$/.test(match[2].toLowerCase()))
+    .map(match => `${/^(was|were)$/i.test(match[1]) ? "past" : "present"}:${match[2].toLowerCase()}`);
+  const remaining = actions(after);
+  return actions(before).flatMap(action => {
+    const index = remaining.indexOf(action);
+    if (index >= 0) { remaining.splice(index, 1); return []; }
+    return [`Preserve the ongoing action and its time (${action}); repair auxiliary agreement rather than converting progressive to simple tense.`];
+  });
+}
+
+function isOptionalClarityPolish(item: FeedbackItem): boolean {
+  return /表达精确性与语域/.test(item.category)
+    && /意思(?:基本)?清楚|含义(?:基本)?清楚|generally clear|meaning is clear/i.test(item.why)
+    && /更具体|更明确|更精确|more (?:specific|precise|clear)/i.test(item.why);
+}
+
 function preservesMeaningAnchors(before: string, after: string): boolean {
   const target = JSON.stringify(meaningAnchors(after));
   if (JSON.stringify(meaningAnchors(before)) === target) return true;
@@ -2930,6 +2950,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
   // this known unsafe suggestion pattern, never the semantic diagnosis.
   const candidates = result.feedback.slice(0, MAX_FEEDBACK_ITEMS)
     .filter(item => !repeatsExplicitCaution(item))
+    .filter(item => !isOptionalClarityPolish(item))
     .filter(item => !sentences.length || !item.category.startsWith("语言"))
     .map(item => {
     if (item.category !== "学术建议 · 衔接与连贯"
@@ -3106,6 +3127,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
       }
     }
     for (const entry of entries) {
+      issues.push(...progressiveAspectIssues(sentences[entry.index], entry.replacement));
       issues.push(...modifierAttachmentIssues(sentences[entry.index], entry.replacement));
       issues.push(...unresolvedComplementIssues(sentences[entry.index], entry.replacement));
     }

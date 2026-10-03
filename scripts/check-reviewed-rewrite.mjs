@@ -3,10 +3,14 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
-const source=fs.readFileSync(new URL('../app/api/coach/route.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'')+'\nexport {checkedSentenceFeedback,assembleReviewedLanguageRevision,reviewCandidateFeedback};';
+const source=fs.readFileSync(new URL('../app/api/coach/route.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'')+'\nexport {checkedSentenceFeedback,assembleReviewedLanguageRevision,reviewCandidateFeedback,findLanguageIssues};';
 const box={exports:{}};
 new Function('exports','require','module',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(box.exports,require,box);
 const f=box.exports;
+for(const sentence of ['I want to learn how to describe limited evidence accurately rather than make our small project sound more important than it is.', 'The results are clearer than they were last year.']) {
+ assert.ok(!f.findLanguageIssues(sentence).some(x=>x.category.includes('连写句')),'Comparative subordinate clauses are not run-on sentences');
+}
+assert.ok(f.findLanguageIssues('The results are clear they are useful.').some(x=>x.category.includes('连写句')),'Actual unconnected clauses remain detected');
 const original='Many students is using AI without checking the answer careful, and teh feedback can be confusing.';
 const correct='Many students are using AI without checking the answer carefully, and the feedback can be confusing.';
 const entry={index:0,replacement:correct,why:'Grammar.',category:'语言准确性 · 主谓一致',confidence:'高'};
@@ -29,6 +33,11 @@ try {
   const result=await f.reviewCandidateFeedback({feedback:[],modelRevision:draft},draft,'test',new AbortController().signal);
   assert.equal(result.modelRevision,correct+tail+ending);
   assert.equal(calls,1,'Missing redundant full text needs no paid retry when safe sentence repairs exist');
+  globalThis.fetch=async()=>Response.json({output_text:JSON.stringify({approved:[],sentenceChecks:checks.map((e,i)=>i?e:{...e,replacement:correct.replace('are using','use')}),modelRevision:'',englishFeedback:[]})});
+  await assert.rejects(()=>f.reviewCandidateFeedback({feedback:[],modelRevision:draft},draft,'test',new AbortController().signal),/preserve meaning/,'Progressive drift must fail closed');
+  globalThis.fetch=async()=>Response.json({output_text:JSON.stringify({approved:[],sentenceChecks:checks,modelRevision:'',englishFeedback:[]})});
+  const optional={category:'学术建议 · 表达精确性与语域',quote:'a fluent sentence',why:'这里意思基本清楚，但改成更具体的说法会更明确。',correction:'a fluent sentence → a precise sentence',confidence:'中'};
+  assert.equal((await f.reviewCandidateFeedback({feedback:[optional],modelRevision:draft},draft,'test',new AbortController().signal)).feedback.length,1,'Optional polish is not a necessary correction');
   calls=0;
   globalThis.fetch=async()=>Response.json({output_text:JSON.stringify({approved:[],sentenceChecks:checks.map((e,i)=>i?e:{...e,replacement:correct.replace('can be','will be')}),modelRevision:'',englishFeedback:[]})});
   await assert.rejects(()=>f.reviewCandidateFeedback({feedback:[],modelRevision:draft},draft,'test',new AbortController().signal),/preserve meaning/);
