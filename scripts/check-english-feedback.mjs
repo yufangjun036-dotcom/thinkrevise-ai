@@ -5,7 +5,7 @@ import {createRequire} from "node:module";
 const require=createRequire(import.meta.url);
 const source=fs.readFileSync(new URL("../app/api/coach/route.ts",import.meta.url),"utf8").replace(/^import .*;\n/gm,"")+"\nexport {attachEnglishFeedback, qualifyReviewedProofClaim, normaliseFeedbackCategory, reviewCandidateFeedback};";
 const box={exports:{}};
-new Function("exports","require","module",ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(box.exports,require,box);
+new Function("exports","require","module",ts.transpileModule(fs.readFileSync(new URL('../app/api/coach/upstream.ts',import.meta.url),'utf8')+'\n'+source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(box.exports,require,box);
 const {attachEnglishFeedback,qualifyReviewedProofClaim}=box.exports;
 const item={category:"语言准确性 · 主谓一致",quote:"AI help",why:"主谓一致",correction:"help → helps",suggestion:"",confidence:"高"};
 const translation={index:0,why:"AI is singular, so use helps in the present tense.",correction:"help → helps"};

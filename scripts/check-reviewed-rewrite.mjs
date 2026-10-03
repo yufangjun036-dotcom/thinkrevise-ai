@@ -5,7 +5,7 @@ import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
 const source=fs.readFileSync(new URL('../app/api/coach/route.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'')+'\nexport {checkedSentenceFeedback,assembleReviewedLanguageRevision,reviewCandidateFeedback,findLanguageIssues};';
 const box={exports:{}};
-new Function('exports','require','module',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(box.exports,require,box);
+new Function('exports','require','module',ts.transpileModule(fs.readFileSync(new URL('../app/api/coach/upstream.ts',import.meta.url),'utf8')+'\n'+source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(box.exports,require,box);
 const f=box.exports;
 for(const sentence of ['I want to learn how to describe limited evidence accurately rather than make our small project sound more important than it is.', 'The results are clearer than they were last year.']) {
  assert.ok(!f.findLanguageIssues(sentence).some(x=>x.category.includes('连写句')),'Comparative subordinate clauses are not run-on sentences');

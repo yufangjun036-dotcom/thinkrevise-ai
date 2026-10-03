@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fetchCoachResponse, coachFailure } from "./upstream";
 import type { HelpMode } from "../../data";
 import { countNonWhitespaceCharacters, MAX_DRAFT_NON_WHITESPACE_CHARACTERS, MAX_RAW_DRAFT_CHARACTERS } from "../../text-limits";
 import { acquireAiRequest, readLimitedJson, requestBodyLimits } from "../security";
@@ -480,6 +481,59 @@ function narrativeTimeIssues(checks: unknown, sentences: string[]): string[] {
   });
 }
 
+// Cosmetic substitutions are not word-form repairs. Restore only aligned,
+// same-class lexical alternatives; keep real edits elsewhere in the sentence.
+// The independent review still judges context and genuine collocation errors.
+function preserveOptionalLexicalChoice(before: string, after: string): string {
+  const a = [...before.matchAll(/\b[A-Za-z]+\b/g)];
+  const b = [...after.matchAll(/\b[A-Za-z]+\b/g)];
+  if (a.length !== b.length) return after;
+  const groups = [
+    ["good", "useful", "beneficial", "helpful"],
+    ["bad", "harmful", "detrimental"],
+    ["important", "significant"],
+  ];
+  let output = after;
+  for (let i = b.length - 1; i >= 0; i--) {
+    const oldWord = a[i][0].toLowerCase(), newWord = b[i][0].toLowerCase();
+    if (oldWord !== newWord && groups.some(group => group.includes(oldWord) && group.includes(newWord))) {
+      output = output.slice(0, b[i].index) + a[i][0] + output.slice(b[i].index! + b[i][0].length);
+    }
+  }
+  return output;
+}
+
+// Reconcile a narrowly evidenced serialization omission: two independent
+// passes name the SAME explicit edit, but the review copied the old sentence.
+// Never infer a new repair from free-form prose or an unapproved candidate.
+function reconcileUnappliedQuotedRepairs(checks: unknown, sentences: string[], candidates: {quote: string; correction: string}[]) {
+  if (!Array.isArray(checks)) return;
+  for (const entry of checks) {
+    const sentence = sentences[entry?.index];
+    if (!sentence || entry.replacement !== sentence || typeof entry.why !== "string"
+      || /无需|无须|不应|不要|不必|不需要/.test(entry.why)) continue;
+    const claims = [...entry.why.matchAll(/[“"]([A-Za-z][A-Za-z\s,'’-]*)[”"][^“”"\n]{0,25}(?:改为|改成|→)\s*[“"]([A-Za-z][A-Za-z\s,'’-]*)[”"]/g)];
+    let revised = sentence;
+    for (const claim of claims) {
+      const before = claim[1].trim(), after = claim[2].trim();
+      const start = findExactQuoteStart(revised, before);
+      if (start < 0 || findExactQuoteStart(revised.slice(start + before.length), before) >= 0) continue;
+      const proposed = concreteEdits({quote:before,correction:`${before} → ${after}`} as FeedbackItem);
+      const wordCount = (text: string) => (text.match(/[a-z0-9]+(?:['’][a-z]+)?/gi) ?? []).length;
+      const sourceStart = findExactQuoteStart(sentence, before);
+      const corroborated = sourceStart >= 0 && proposed?.length && proposed.every(edit => candidates.some(candidate => {
+        const candidateStart = findExactQuoteStart(sentence, candidate.quote);
+        if (candidateStart < 0 || sentence.indexOf(candidate.quote, candidateStart + 1) >= 0) return false;
+        return concreteEdits(candidate as FeedbackItem)?.some(known => known.before === edit.before && known.after === edit.after
+          && wordCount(sentence.slice(0, candidateStart)) + known.start === wordCount(sentence.slice(0, sourceStart)) + edit.start);
+      }));
+      if (!corroborated) continue;
+      revised = revised.slice(0, start) + after + revised.slice(start + before.length);
+    }
+    entry.replacement = revised;
+  }
+}
+
 function checkedSentenceFeedback(checks: unknown, sentences: string[]): FeedbackItem[] {
   if (!Array.isArray(checks) || checks.length !== sentences.length) throw new Error("Incomplete sentence review");
   const seen = new Set<number>();
@@ -493,6 +547,7 @@ function checkedSentenceFeedback(checks: unknown, sentences: string[]): Feedback
     seen.add(entry.index);
     const quote = sentences[entry.index];
     const modelReplacement = entry.replacement.trim();
+    entry.replacement = preserveOptionalLexicalChoice(quote, entry.replacement);
     const replacement = preserveOptionalAgreementChoice(quote, normalisePracticeNoun(normaliseNarrativeDiscovery(quote, normaliseQuantifiedCountSubjects(normaliseCertainArticles(preserveGrammaticalSubjectPronoun(quote, preserveOptionalCoordinatorComma(quote, entry.replacement.trim())))), sentences[entry.index + 1] ?? "")));
     entry.replacement = replacement;
     if (quote === replacement && modelReplacement !== quote) entry.why = "无需修改：此处仅为已排除的可选表达调整。";
@@ -2863,7 +2918,7 @@ async function auditInitialCoverage(
   prepared: ReturnType<typeof validateLiveResult>, draft: string, mode: HelpMode,
   apiKey: string, signal: AbortSignal,
 ) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetchCoachResponse("https://api.openai.com/v1/responses", {
     method: "POST", signal,
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -3028,6 +3083,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
     ? "\n每句先填写 meaningToPreserve：简述原句的主体、动作、时间指向、情态/否定、数量与限定人群；这是内容核对摘要，不是推理过程。然后才填写 replacement，逐项保留这些意义。只做修复明确语言错误所必需的最小改动，不顺带润色。特别保留 will/would/can/could/may/might/must/should，不得把带情态的预测改成一般现在时事实，不得无依据增强或削弱语气；情态后动词形式错误只改动词，不删除情态词。保留 not/never/only/some/all、数值、比较方向、before/after/if 等限制。时态要修正错误形式但保留原时间指向，不把 last week 变成现在、不把未来变为习惯；没有明确依据时不强行统一全文为过去时。限定某一子群体的从句不可改成两个并列事实。保持原有主句与修饰关系，不将 larger（大小）换成 more（数量）。同一对象的单复数处理需参考后续代词；若后文用 it 指代同一概念，避免前句改为复数处理而后句保留 it。对修改后句子再次核对上述内容。无法确定的歧义不擅自消除。why 仅解释实际发生的修改，不把未改动词语列为修改。"
     : "";
   const cohesionReviewInstruction = baseCohesionReviewInstruction + cohesionEvidenceInstruction + draftLayoutInstruction + sentenceReviewInstruction + sentenceMeaningInstruction
+    + "\nLanguage-only sentence checks must leave grammatically acceptable vocabulary unchanged. Replacing an adjective with another adjective (good/useful/beneficial/helpful, important/significant) merely for academic tone is not a word-form correction. Do not label a synonym substitution as grammar. Repair actual forms (sings good → sings well, students is → students are) while retaining valid wording elsewhere, including in the same sentence. If no obligatory language change is needed, copy the original sentence exactly."
     + "\nPossessive determiners its/their/our may directly precede nouns (its authors, their findings). This is not a missing possessive construction. Expanding a clear pronoun into a named possessor is optional, not grammar repair. In parallel noun phrases, the and its need not be identical when their references are already clear. If proposing only optional clarification, leave replacement unchanged and explicitly state no necessary correction."
     + "\nEnglish presentation IDs refer ONLY to input.candidates, never input.sentences or languageCandidates. For each translation, copy candidates[index].quote EXACTLY into sourceQuote, and translate only that candidate's why and correction. A candidate about an unsupported policy must retain that policy scope in English. Do not replace its diagnosis with a neighbouring source or language issue. Translate any withheld-example warning faithfully rather than supplying a new example."
     + "\n描述结果不等于声称因果：单纯报告分数、人数、均值或观察值的变化，并未自行断言谁导致了变化。因果类候选必须指出原文实际存在的因果主张或跨句推断，不能替作者假设一个更强结论再批评它。若当前全文已明确区分分数变化与因果、说明局限，则拒绝要求在普通结果句后重复添加同一免责声明的候选。复检只能依据当前稿，不能因第一稿曾有强因果断言，就把其残留的正常事实描述仍当作因果错误。若存在真实的来源缺失或明确未经支持的因果断言，仍可按其实际缺口提示。"
@@ -3040,7 +3096,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
     + (sentences.length ? "\n叙事时间核对：meaningToPreserve 的时间指向必须根据相邻句判断，不能仅把原句错误动词照抄为语义。前句已经说明过去某次活动，后句仍描述同一次活动的操作或结果时，过去时间锚继续有效；不能只把原形改成第三人称单数而丢失过去经历。遇到 now、usually、一般规律、当前反思或未来计划时再切换时间，不把全文机械改为过去时。" : "")
     + (sentences.length ? "\n跨段事件时间：段落换行不重置时间。对收集、记录、测量、访谈、提交等具体操作，先核对它属于前文已经完成的哪一次活动，并检查后句是否继续报告该活动的结果；若是已完成活动，不要仅因单数主语把错误原形改为现在时第三人称形式。meaningToPreserve 应明确写出过去操作或当前惯例，以及原文中的时间依据。与此同时，研究结论的当前评价、一般规律和未来建议可与过去方法叙述并存，不能把它们一并改成过去时；明确 every day/usually/now 的惯例或当前操作也不得倒退为过去时。没有足够语境时承认歧义，不强选一个时间。" : "")
     + (sentences.length ? "\n全文指代一致性：在逐句修正前核对相邻句的同一对象。media、data、team 等词可有不同数的用法，不一律改为单数或复数；原文后句明确用 it 指代时，保持单数一致；明确用 they 时保持复数一致。指代不明则不强行猜测。" : "")
-    + (retryIssues ? "\n上次修正未通过意义标记保留检查。重新生成并保留原句标记，不删除情态、否定、数字或范围词：" + JSON.stringify(retryIssues) : "");
+    + (retryIssues ? "\n上次输出未通过一致性检查，请按下面每项的具体原因修复。若 why 已指出具体语言错误而 replacement 仍复制了错误原句，必须把该正确修正实际写入 replacement，不能只在 why 里说要改；若判断原句确实正确，则明确撤回错误诊断。保留原意不等于保留错误动词或冠词。不要删除正确的情态、否定、数字或范围词：" + JSON.stringify(retryIssues) : "");
   // The reviewer is normally allowed to veto a candidate. Preserve only the
   // narrow cases whose structure itself proves the rubric condition: an
   // unbounded empirical intervention claim, or an explicitly missing
@@ -3068,7 +3124,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
       || isStructurallyVarifySpelling(item, draft)
       || isStructurallyStrongRegisterAdvice(item, draft)
       || isStructurallyUnsupportedExperimentProof(item, draft) ? [index] : []));
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetchCoachResponse("https://api.openai.com/v1/responses", {
     method: "POST", signal,
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -3164,6 +3220,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
       }
     }
   }
+  if (sentences.length) reconcileUnappliedQuotedRepairs(decision.sentenceChecks, sentences, languageCandidates);
   let languageFeedback = sentences.length ? checkedSentenceFeedback(decision.sentenceChecks, sentences) : [];
   if (sentences.length) {
     const entries = decision.sentenceChecks as {index: number; replacement: string}[];
@@ -3328,7 +3385,7 @@ export async function POST(request: Request) {
   let upstreamStartedAt = totalStartedAt;
   try {
     upstreamStartedAt = Date.now();
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetchCoachResponse("https://api.openai.com/v1/responses", {
       method: "POST",
       signal: upstreamSignal,
       headers: {
@@ -3463,27 +3520,11 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("OpenAI coach request failed:", error instanceof Error ? error.message : "unknown_error");
     if (error instanceof MeaningPreservationError) {
-      return json({ error: "本次修正未通过原意保留或指代一致性检查，已停止返回不可靠的建议。原稿未修改，请稍后重试。",
+      return json({ error: "This revision did not pass the meaning or reference-consistency checks. Your draft is unchanged; please try again.",
         ...(localAccuracyDiagnostics(request) ? { safetyIssues: error.issues, rejectedReview: error.rejectedReview } : {}),
       }, 503);
     }
-    const timedOut = error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name);
-    const rawFallback = phase === "revision"
-      ? demoRevisionResponse(draft, body.taskPrompt)
-      : demoResponse(draft, mode, body.taskPrompt);
-    const fallback = phase === "revision"
-      ? ensureMinorRevisionConsistency(rawFallback, draft, body.originalDraft ?? "", body.priorFeedback ?? [])
-      : rawFallback;
-    const responseFallback = phase === "revision"
-      ? addRevisionComparison(fallback, draft, body.originalDraft ?? "", body.priorFeedback ?? [])
-      : fallback;
-    return json({
-      ...responseFallback,
-      provider: "demo",
-      fallbackNotice: timedOut
-        ? "实时 AI 等待时间过长，已自动切换到预配置演示反馈。"
-        : "AI 服务暂时不可用，已切换到预配置演示反馈。",
-    });
+    return json(coachFailure(error, true), 503);
   }
   } finally {
     access.release();

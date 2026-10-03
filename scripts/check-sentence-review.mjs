@@ -5,7 +5,7 @@ import {createRequire} from 'node:module';
 const require=createRequire(import.meta.url);
 const source=fs.readFileSync(new URL('../app/api/coach/route.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'')+'\nexport {languageReviewSentences,checkedSentenceFeedback,coveredByFullLanguageRepair,reviewCandidateFeedback,validateLiveResult,dedupeFeedback,normaliseFeedbackCategory,sentenceEditExplanation,agreementConsistencyIssues,narrativeTimeIssues,mannerAttachmentIssues,reconcileOperationalPast,preservesMeaningAnchors};';
 const box={exports:{}};
-new Function('exports','require','module',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(box.exports,require,box);
+new Function('exports','require','module',ts.transpileModule(fs.readFileSync(new URL('../app/api/coach/upstream.ts',import.meta.url),'utf8')+'\n'+source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(box.exports,require,box);
 const f=box.exports;
 for (const [quote, replacement, count] of [
  ['We study long‑term changes in high‑skill work.', 'We study long-term changes in high-skill work.', 0],
