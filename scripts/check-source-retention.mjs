@@ -25,3 +25,7 @@ assert.deepEqual(f.checkedSentenceFeedback([{index:0,replacement:revised,why:'Th
 assert.equal(f.preserveOptionalCoordinatorComma('Students left teachers stayed.','Students left; teachers stayed.'),'Students left; teachers stayed.');
 assert.equal(f.preserveOptionalCoordinatorComma(original,revised.replace('tested','tests')),revised.replace('tested','tests'),'Do not hide non-comma edits');
 console.log('Source retention and optional serial comma regression tests passed.');
+const finding='A famous 2025 study found that AI tutoring raises university pass rates by 60 percent.';
+assert.deepEqual(f.checkedSentenceFeedback([{index:0,replacement:finding.replace('raises','raised'),why:'Use the past tense after found.',category:'语言准确性 · 时态与动词形式',confidence:'高'}],[finding]),[]);
+const pastEvent='The study found that the intervention improves scores during the trial last year.';
+assert.equal(f.checkedSentenceFeedback([{index:0,replacement:pastEvent.replace('improves','improved'),why:'The clause refers to the completed trial last year.',category:'语言准确性 · 时态与动词形式',confidence:'高'}],[pastEvent]).length,1);

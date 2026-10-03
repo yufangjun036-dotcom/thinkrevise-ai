@@ -345,6 +345,16 @@ function normalisePracticeNoun(text: string): string {
 }
 
 function preserveOptionalAgreementChoice(before: string, after: string): string {
+  // A past reporting verb does not require backshift of a general finding.
+  // Preserve only isolated, otherwise grammatical present-to-past changes;
+  // explicit past-event anchors in the reported clause still allow repair.
+  const reported = before.match(/\b(?:found|reported|showed|concluded) that (.+)$/i)?.[1];
+  if (reported && !/\b(?:yesterday|last|ago|during|in (?:19|20)\d{2})\b/i.test(reported)) {
+    for (const [present, past] of [["raises", "raised"], ["reduces", "reduced"], ["increases", "increased"], ["improves", "improved"], ["supports", "supported"]]) {
+      const verb = new RegExp(`\\b${present}\\b`);
+      if (verb.test(reported) && after === before.slice(0, before.length - reported.length) + reported.replace(verb, past)) return before;
+    }
+  }
   // Generic abstract "safe use of ..." permits a zero article. Adding "the"
   // is optional even when a different error in this sentence needs repair.
   const genericUse = before.match(/\b(?:about|on|for) (?:safe|responsible|effective) use of\b/gi) ?? [];
