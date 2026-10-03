@@ -1,4 +1,5 @@
 "use client";
+import GrammarPractice from "./grammar-practice/practice";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Image from "next/image";
@@ -1031,6 +1032,7 @@ export default function CoachWorkspace() {
       <div className="reflection-fields"><label><span>Learning reflection</span><strong>After comparing the original, second and final versions, what is the most important revision principle you learned?</strong><textarea value={reflection} maxLength={1000} onChange={(event) => setReflection(event.target.value)} placeholder="Write your reflection here…" /></label></div>
       <div className="ai-record"><div><SparkIcon /><span>Record of AI contribution</span></div><p>AI first diagnosed the original draft; the learner independently completed a second draft; AI then reanalysed it and addressed remaining issues. The learner must still verify the facts, position and course requirements.</p></div>
       <div className="finish-actions report-actions"><button className="secondary-button" type="button" disabled={!reflection.trim()} onClick={async () => { await navigator.clipboard.writeText(buildLearningRecord()); setRecordCopied(true); }}>{recordCopied ? "Learning record copied" : "Copy learning record"}</button><button className="secondary-button" type="button" disabled={!reflection.trim()} onClick={downloadLearningRecord}>Download learning report</button><button className="primary-button" type="button" disabled={!reflection.trim()} onClick={() => { resetLearningWork(); setStage("home"); }}>Finish and return home <ArrowIcon /></button></div>
+      <GrammarPractice initial={response.feedback} recheck={revisionResponse.feedback} />
     </section>}
   </div></main>;
 }
