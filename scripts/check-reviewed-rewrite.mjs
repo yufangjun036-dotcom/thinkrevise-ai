@@ -10,7 +10,9 @@ const f=box.exports;
 for(const sentence of ['I want to learn how to describe limited evidence accurately rather than make our small project sound more important than it is.', 'The results are clearer than they were last year.']) {
  assert.ok(!f.findLanguageIssues(sentence).some(x=>x.category.includes('连写句')),'Comparative subordinate clauses are not run-on sentences');
 }
-assert.ok(f.findLanguageIssues('The results are clear they are useful.').some(x=>x.category.includes('连写句')),'Actual unconnected clauses remain detected');
+const runOn='The results are clear they are useful.';
+assert.ok(f.checkedSentenceFeedback([{index:0,replacement:'The results are clear; they are useful.',why:'Two independent clauses need a boundary.',category:'语言准确性 · 句子连接与标点',confidence:'高'}],[runOn]).length===1,'Actual unconnected clauses remain supported by sentence review');
+for(const sentence of ['We did not recorded how often these students had read before the room opened.','The materials we had used were stored safely.'])assert.ok(!f.findLanguageIssues(sentence).some(x=>x.category.includes('连写句')),'Lexical heuristics must not invent clause boundaries');
 const original='Many students is using AI without checking the answer careful, and teh feedback can be confusing.';
 const correct='Many students are using AI without checking the answer carefully, and the feedback can be confusing.';
 const entry={index:0,replacement:correct,why:'Grammar.',category:'语言准确性 · 主谓一致',confidence:'高'};
