@@ -2,8 +2,11 @@ type Feedback = { category: string; quote: string; why: string; correction?: str
 
 // Display-only scaffolding: retain original corrections for review and reports.
 export function feedbackForMode<T extends Feedback>(item: T, mode: string): T {
-  if (mode === "rewrite") return item;
   const language = item.category.startsWith("语言");
+  // Academic guidance must retain its actual evidence/scope diagnosis and
+  // actionable direction, as in the Chinese UI. Generic scaffolding cannot
+  // replace an explanation of the specific academic problem.
+  if (mode === "rewrite" || !language) return item;
   const focus = item.why.startsWith("本句实际修改：")
     ? [...new Set([...item.why.matchAll(/“([^”]+)” →|在“([^”]+)”后补入|删除“([^”]+)”/g)].map(m => m[1] || m[2] || m[3]).filter(word => item.quote.includes(word)))] : [];
   const why = language ? (focus.length ? `Check these parts of the original: ${focus.map(word => `“${word}”`).join(", ")}.` : "Check the highlighted language form in context.")
