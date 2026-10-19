@@ -1,4 +1,5 @@
 // Exercise the actual route functions offline: no API key or network involved.
+process.env.SENTENCE_LANGUAGE_REVIEW = '0'; // Isolate legacy comparison fixtures; sentence-review suite tests the enabled path.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';

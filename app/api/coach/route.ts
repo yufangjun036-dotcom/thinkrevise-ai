@@ -154,9 +154,9 @@ function describeDraftLayout(draft: string) {
 }
 
 function languageReviewSentences(draft: string) {
-  // Staged until live coverage/latency tests can run; leave production unchanged.
-  if (process.env.SENTENCE_LANGUAGE_REVIEW !== "1"
-    || draft.split(/\s+/).length < 60) return [];
+  // Both rounds cover every sentence, including short drafts. No extra model call:
+  // this is part of the existing quality review, not a third audit pass.
+  if (process.env.NODE_ENV !== "production" && process.env.SENTENCE_LANGUAGE_REVIEW === "0") return [];
   return Array.from(new Intl.Segmenter("en", { granularity: "sentence" }).segment(draft))
     .map(part => part.segment.trim()).filter(Boolean);
 }
@@ -614,6 +614,14 @@ function embeddedPluralAfterSingularNumber(draft: string, start: number, quote: 
     && /\bthe\s+(?:total\s+)?number\s+of\s+$/i.test(draft.slice(0, start));
 }
 
+function spellingReplacement(draft: string, start: number, original: string, corrected: string) {
+  const prefix = draft.slice(0, start);
+  const startsSentence = !prefix.trim() || /[.!?]["’”')\]]*\s+$/.test(prefix)
+    && !/\b(?:Mr|Mrs|Ms|Dr|Prof|etc|e\.g|i\.e|[A-Z])\.$/i.test(prefix.trim());
+  if (original === original.toUpperCase()) return corrected.toUpperCase();
+  return startsSentence || /^[A-Z]/.test(original) ? corrected[0].toUpperCase() + corrected.slice(1) : corrected;
+}
+
 function findLanguageIssues(draft: string): FeedbackItem[] {
   const found: FeedbackItem[] = [];
   const spelling: Array<[string, string, string]> = [
@@ -643,17 +651,19 @@ function findLanguageIssues(draft: string): FeedbackItem[] {
     ["neccessary", "necessary", "necessary 是一个 c、两个 s。"],
   ];
   for (const [wrong, right, explanation] of spelling) {
-    const match = draft.match(new RegExp(`\\b${wrong}\\b`, "i"));
-    if (match) found.push({
+    for (const match of draft.matchAll(new RegExp(`\\b${wrong}\\b`, "gi"))) {
+    const replacement = spellingReplacement(draft, match.index!, match[0], right);
+    found.push({
       category: "语言准确性 · 拼写错误",
       quote: match[0],
       why: `“${match[0]}”是拼写错误。正式写作中的拼写错误会降低文章的清晰度和可信度。`,
-      correction: `${match[0]} → ${right}。${explanation}`,
+      correction: `${match[0]} → ${replacement}。${explanation}${replacement !== right ? " 保留并检查句首或原有大写。" : ""}`,
       question: "",
       hints: [],
       suggestion: "",
       confidence: "高",
     });
+  }
   }
   const grammar: Array<[RegExp, string | ((matched: string) => string), string, string]> = [
     // Natural reflective-writing regressions: when one span contains several
@@ -1164,6 +1174,21 @@ function repairFeedbackExplanation(item: FeedbackItem): FeedbackItem {
 function normaliseFeedbackCategory(item: FeedbackItem): FeedbackItem {
   // The dedicated review already restricts these entries to language categories.
   // A generic phrase such as "academic expression" in why cannot override that.
+  const pair = item.correction.split("→").map(part => part.trim());
+  if (item.category.startsWith("语言") && pair.length === 2) {
+    let spellingOnly = pair[0];
+    for (const issue of findLanguageIssues(pair[0]).filter(issue => issue.category.includes("拼写"))) {
+      const replacement = issue.correction.split("→")[1]?.split("。")[0].trim();
+      if (replacement) spellingOnly = spellingOnly.replace(issue.quote, replacement);
+    }
+    if (spellingOnly !== pair[0] && spellingOnly.toLowerCase() === pair[1].toLowerCase()) {
+      return { ...item, category: "语言准确性 · 拼写与大小写" };
+    }
+  }
+  if (item.category.startsWith("语言") && pair.length === 2
+    && pair[0] !== pair[1] && pair[0].toLowerCase() === pair[1].toLowerCase()) {
+    return { ...item, category: "语言准确性 · 拼写与大小写" };
+  }
   if (isReviewedSentenceLanguage(item)) return item;
   item = repairFeedbackExplanation(item);
   if (/句子完整性/.test(item.category)
@@ -1533,7 +1558,10 @@ function isImplausiblyShortLongSentence(item: FeedbackItem) {
 
 function isImplausiblyBroadSpellingQuote(item: FeedbackItem) {
   if (isReviewedSentenceLanguage(item)) return false;
-  return /拼写/.test(item.category) && item.quote.trim().split(/\s+/).length > 4;
+  // Reviewed sentence-level spelling repairs are valid historical feedback.
+  // Reject vague broad quotes, not a concrete replacement we can align.
+  return /拼写/.test(item.category) && item.quote.trim().split(/\s+/).length > 4
+    && !concreteEdits(item)?.length;
 }
 
 function repeatsUnchangedSuffix(item: FeedbackItem) {
@@ -3075,7 +3103,7 @@ async function reviewCandidateFeedback(value: unknown, draft: string, apiKey: st
   const cohesionIndexes = candidates.flatMap((item, index) => item.category === "学术建议 · 衔接与连贯" ? [index] : []);
   const goalIndexes = candidates.flatMap((item, index) => item.category.startsWith("学术")
     && /\b(?:aim|goal|purpose|objective)s?\b/i.test(item.quote) ? [index] : []);
-  const sentenceReviewInstruction = sentences.length ? "\n本次启用整句语言核对：sentenceChecks 必须逐一覆盖 input.sentences，每句恰好一项。此处允许发现候选遗漏的客观语言问题，但不能新增学术建议。replacement 是修正该句全部明确语言问题后的完整英文句子，不是零散替换指令；若正确则逐字保留原句。按全文统一研究叙述时间，但不能把可接受的学术现在时都判错；无过去时间依据时允许现在时。检查主谓、冠词、可数名词、所有格、动名词、不定式、关系从句、逗号拼接、名词词形及支配结构。将修正读回原句确认没有重复代词、缺少 to 或留下同一句中的另一个错误。禁止仅因风格偏好改正确内容，不增加事实、改变数量或把因果主张改成相关性；学术问题仍走 approved。why 用中文简述本句实际修正；正常句说明无需修改。category 选择本句主要语言类型。sentenceChecks 是本次语言反馈的唯一来源，旧的语言候选不再单独展示。needsRevision 为 true 时最终稿必须与这些整句语言修正以及批准的学术建议一致。" : "";
+  const sentenceReviewInstruction = sentences.length ? "\n本次启用整句语言核对：sentenceChecks 必须逐一覆盖 input.sentences，每句恰好一项。此处允许发现候选遗漏的客观语言问题，但不能新增学术建议。replacement 是修正该句全部明确语言问题后的完整英文句子，不是零散替换指令；若正确则逐字保留原句。按全文统一研究叙述时间，但不能把可接受的学术现在时都判错；无过去时间依据时允许现在时。检查拼写及句首大写（如句首 teh 必须一次改为 The，而非 the）、主谓、冠词、可数名词、所有格、动名词、不定式、关系从句、逗号拼接、名词词形及支配结构。将修正读回原句确认没有重复代词、缺少 to 或留下同一句中的另一个错误。禁止仅因风格偏好改正确内容，不增加事实、改变数量或把因果主张改成相关性；学术问题仍走 approved。why 用中文简述本句实际修正；正常句说明无需修改。category 选择本句主要语言类型。sentenceChecks 是本次语言反馈的唯一来源，旧的语言候选不再单独展示。needsRevision 为 true 时最终稿必须与这些整句语言修正以及批准的学术建议一致。" : "";
   const cohesionEvidenceInstruction = cohesionIndexes.length
     ? "\n对 cohesionIndexes 中每项先填写 cohesionReviews：用 relationEvidence 说明跨越该边界的实际语义关系或共同目的；不存在则明确写不存在。只因两边都涉及大学、社会等大背景，或都各自讲得通，不构成关系。paragraphs 是按原文真实换行拆出的内容，不得自行创造标题或小节。再填写 verdict 为 approve 或 reject，并用 reason 区分关系成立、关系缺失、或候选修正本身有害。有真实意义断裂且建议是说明真实联系或分别组织时可以批准，不必证明有唯一正确改法。approved 必须与这些逐项 verdict 一致；最终稿也只能执行批准的建议。"
     : "";
@@ -3394,7 +3422,7 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
-        instructions: instructions + feedbackFidelityInstruction + empiricalClaimCriteria + academicStructureCriteria + predictionAndGeneralisationCriteria + academicChecklistOutputInstruction + draftLayoutInstruction,
+        instructions: instructions + "\n每项语言修正必须代回整句复读，检查拼写修正后的句首大小写及相邻结构，不把同一处完整修改拆成两轮。句首 teh → The；句中 teh → the。纯大小写变化归入拼写与大小写，不是句子连接与标点。" + feedbackFidelityInstruction + empiricalClaimCriteria + academicStructureCriteria + predictionAndGeneralisationCriteria + academicChecklistOutputInstruction + draftLayoutInstruction,
         input,
         store: false,
         max_output_tokens: 10_000,
@@ -3404,7 +3432,8 @@ export async function POST(request: Request) {
             type: "json_schema",
             name: "revision_feedback",
             strict: true,
-            schema,
+            schema: { ...schema, properties: { ...schema.properties,
+              modelRevision: { type: "string", const: "", description: "Detection stage only; the independent reviewer generates the final draft." } } },
           },
         },
       }),
@@ -3426,7 +3455,9 @@ export async function POST(request: Request) {
     const upstreamMs = Date.now() - upstreamStartedAt;
     const validationStartedAt = Date.now();
     const rawModelOutput = JSON.parse(outputText);
-    const preparedResult = validateLiveResult(rawModelOutput, draft, mode, 0, phase === "revision" || mode === "rewrite");
+    // Generate the final draft only after independent review, not twice.
+    const preparedResult = validateLiveResult({ ...rawModelOutput,
+      modelRevision: phase === "revision" || mode === "rewrite" ? draft : "" }, draft, mode, 0, false);
     const includeAccuracyStages = localAccuracyDiagnostics(request);
     const reviewTrace: AccuracyTrace | undefined = includeAccuracyStages ? {} : undefined;
     let coverageResult = preparedResult;
@@ -3455,7 +3486,10 @@ export async function POST(request: Request) {
     const reviewedResult = await reviewCandidateFeedback(candidateResult, draft, apiKey, upstreamSignal, reviewTrace);
     const usedSentenceReview = languageReviewSentences(draft).length > 0;
     const postReviewProtected = [
-      ...findLanguageIssues(draft),
+      // A lexical run-on heuristic cannot distinguish a zero relative clause
+      // ("the materials we had used") from a second independent clause.
+      // Keep it as a review candidate, never reinstate it after review rejects it.
+      ...findLanguageIssues(draft).filter(item => item.category !== "语言准确性 · 连写句"),
       buildUnsupportedReplacementPredictionFeedback(draft),
       buildUnsupportedUniversalAiPolicyFeedback(draft),
       buildOverbroadAiFairnessThesisFeedback(draft),

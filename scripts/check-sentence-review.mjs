@@ -73,7 +73,7 @@ assert.equal(f.languageReviewSentences(original,Array(4).fill(item)).length,0,'S
 process.env.SENTENCE_LANGUAGE_REVIEW='1';
 assert.equal(f.languageReviewSentences(original,[item]).length,11);
 assert.equal(f.languageReviewSentences(original,[]).length,11);
-assert.equal(f.languageReviewSentences('This is a short paragraph.').length,0,'Keep staged length boundary explicit');
+assert.equal(f.languageReviewSentences('This is a short paragraph.').length,1,'Short drafts also receive complete sentence review');
 const sentences=f.languageReviewSentences(original,Array(4).fill(item));
 assert.equal(sentences.length,11);
 assert.ok(!sentences.some(s=>s.startsWith('#')));
@@ -207,6 +207,7 @@ try{
   await assert.rejects(()=>f.reviewCandidateFeedback({feedback:[],modelRevision:''},original,'test',new AbortController().signal),/preserve meaning/);
   assert.equal(calls,2,`Reject altered anchor ${from}`);
  }
+ process.env.SENTENCE_LANGUAGE_REVIEW='0'; // Isolate academic approval in these fixtures.
  const goalDraft='Our goal is to reuse paper. Throwing usable paper away does not meet that goal.';
  const goalItem={...academic,quote:'Throwing usable paper away does not meet that goal.',correction:'Use may instead.'};
  const goalEntry={index:0,goalQuote:'Our goal is to reuse paper.',actionAndGoalRelation:'Discarding usable paper is not reusing it.',claimType:'goal_consistency',verdict:'reject'};
