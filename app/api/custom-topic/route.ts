@@ -83,7 +83,7 @@ export async function POST(request: Request) {
   const forcedDemo = process.env.THINKREVISE_DEMO_MODE === "1" || process.env.REVISIONCOACH_DEMO_MODE === "1";
   const apiKey = forcedDemo ? undefined : process.env.OPENAI_API_KEY;
   if (!apiKey) return json({ error: "Live topic interpretation is temporarily unavailable." }, 503);
-  const access = acquireAiRequest(request, "custom-topic");
+  const access = await acquireAiRequest(request, "custom-topic");
   if (!access.ok) return access.response;
 
   const instructions = `You are an academic English writing coach. Interpret the learner's English interest description so you can provide genuinely relevant target vocabulary for free writing. Do not simply copy their wording into a topic label or return only a broad category such as entertainment, travel or animals. Infer a specific thematic direction from the objects, setting, behaviour, relationships, effects, tensions or changes described. Do not prescribe a question the learner must answer.
@@ -141,6 +141,6 @@ Write inferredDirection as one concise English sentence that captures the specif
     console.warn("Custom topic understanding failed:", error instanceof Error ? error.message : "unknown_error");
     return json({ error: "We could not interpret a writing direction from this description. Please try again later." }, 502);
   } finally {
-    access.release();
+    await access.release();
   }
 }

@@ -20,6 +20,7 @@ export default function PrivacyPage() {
       <section>
         <h2>What this project stores</h2>
         <p>This version does not require an account and has no application database for saving essays. To prevent accidental loss after refreshing, progress is stored temporarily in sessionStorage for the current browser tab. Starting over or closing the tab clears this temporary progress.</p>
+        <p>An anonymous browser identifier is stored in localStorage to distinguish visitors sharing a campus network. The shared rate-limit database stores a hashed identifier and expiring usage counters, not essay content. Limits apply per browser, not to a verified person; daily allowances reset at midnight UTC+8.</p>
         <p>The server records only anonymous operational information needed for troubleshooting and cost control, such as request type, duration, token count and error category. It should not log full drafts, topic content or API keys.</p>
       </section>
 

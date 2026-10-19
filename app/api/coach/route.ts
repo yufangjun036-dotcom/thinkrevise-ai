@@ -3357,7 +3357,7 @@ export async function POST(request: Request) {
     return json({ ...responseFallback, provider: "demo" });
   }
 
-  const access = acquireAiRequest(request, "coach");
+  const access = await acquireAiRequest(request, "coach");
   if (!access.ok) return access.response;
 
   try {
@@ -3527,6 +3527,6 @@ export async function POST(request: Request) {
     return json(coachFailure(error, true), 503);
   }
   } finally {
-    access.release();
+    await access.release();
   }
 }

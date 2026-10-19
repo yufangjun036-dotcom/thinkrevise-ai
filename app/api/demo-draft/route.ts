@@ -11,7 +11,7 @@ export async function POST(request: Request) {
   const forcedDemo = process.env.THINKREVISE_DEMO_MODE === "1" || process.env.REVISIONCOACH_DEMO_MODE === "1";
   const key = forcedDemo ? undefined : process.env.OPENAI_API_KEY;
   if (!key) return json({ error: "Demo-draft generation requires live AI. Please try again later or write your own draft." }, 503);
-  const access = acquireAiRequest(request, "demo-draft");
+  const access = await acquireAiRequest(request, "demo-draft");
   if (!access.ok) return access.response;
   const schema = {
     type: "object", additionalProperties: false,
@@ -70,6 +70,6 @@ export async function POST(request: Request) {
   const validationFailure = /missing|invalid|length|similar|grounded|spelling|target word/i.test(lastFailure);
   return json({ error: validationFailure ? "This demo draft did not pass the target-word or content checks. Please generate it again." : "AI could not generate a demo draft just now. Please try again later." }, 502);
   } finally {
-    access.release();
+    await access.release();
   }
 }

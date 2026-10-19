@@ -32,7 +32,7 @@ export async function POST(request: Request) {
   if (process.env.ASSIGNMENT_REVIEW_ENABLED !== "1") return json({ error: "Assignment review is not enabled" }, 503);
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || process.env.REVISIONCOACH_DEMO_MODE === "1" || process.env.THINKREVISE_DEMO_MODE === "1") return json({ error: "Live assignment review unavailable" }, 503);
-  const access = acquireAiRequest(request, "coach");
+  const access = await acquireAiRequest(request, "coach");
   if (!access.ok) return access.response;
   try {
     const upstream = await fetch("https://api.openai.com/v1/responses", {
@@ -56,5 +56,5 @@ export async function POST(request: Request) {
     return json({ checks: result.checks, wordCount, provider: "openai" });
   } catch {
     return json({ error: "Assignment review unavailable; you can keep revising" }, 502);
-  } finally { access.release(); }
+  } finally { await access.release(); }
 }
