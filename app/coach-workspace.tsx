@@ -1,5 +1,6 @@
 "use client";
 import GrammarPractice from "./grammar-practice/practice";
+import RevisionEditAudit, { SuggestedChanges, type SuggestedChange, type EditAudit } from "./revision-edit-audit";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Image from "next/image";
@@ -14,8 +15,8 @@ import { countNonWhitespaceCharacters, limitNonWhitespaceCharacters, MAX_RAW_DRA
 type Path = "practice" | "revision";
 type Stage = "home" | "setup" | "draft" | "feedback" | "revise" | "reflect";
 type RevisionStatus = "partial" | "remaining" | "changed" | "supplemental";
-type FeedbackItem = { whyEnglish?: string; correctionEnglish?: string; category: string; quote: string; why: string; correction?: string; question?: string; hints?: string[]; suggestion?: string; confidence: "高" | "中" | "低"; revisionStatus?: RevisionStatus; revisionProgress?: { completed: string[]; pending: string[] } };
-type RevisionComparison = { initialCount: number; resolved: Array<Pick<FeedbackItem, "category" | "quote">>; remainingCount: number; partialCount?: number; changedCount: number; supplementalCount: number };
+type FeedbackItem = { suggestedChanges?: SuggestedChange[]; whyEnglish?: string; correctionEnglish?: string; category: string; quote: string; why: string; correction?: string; question?: string; hints?: string[]; suggestion?: string; confidence: "高" | "中" | "低"; revisionStatus?: RevisionStatus; revisionProgress?: { completed: string[]; pending: string[] } };
+type RevisionComparison = { editAudit?: EditAudit[]; initialCount: number; resolved: Array<Pick<FeedbackItem, "category" | "quote">>; remainingCount: number; partialCount?: number; changedCount: number; supplementalCount: number };
 type CoachResponse = { summary: string; feedback: FeedbackItem[]; modelRevision: string; overview: string[]; meaningRisk: string; provider: "openai" | "demo"; fallbackNotice?: string; revisionComparison?: RevisionComparison };
 type CustomTopicResult = { inferredDirection: string; words: Array<Pick<VocabularyItem, "word" | "definition" | "collocation" | "example">>; provider: "openai" };
 type AssignmentBrief = { title: string; instructions: string; wordLimit: string; criteria: string };
@@ -294,6 +295,7 @@ function InteractiveHighlightedDraft({
         {isOpen && item && <span className="inline-issue-popover" role="dialog" aria-label={`Revision guidance for issue ${issueIndex + 1}`}>
           <span className="inline-issue-heading"><strong>Issue {issueIndex + 1} / {feedback.length} · {displayCategory(item.category)}</strong><button type="button" onClick={onDismiss} aria-label="Close revision guidance">×</button></span>
           <span className="inline-issue-copy">{displayWhy(item)}</span>
+          <SuggestedChanges items={item.suggestedChanges} english />
           <span className="inline-issue-label">How to revise</span>
           <span className="inline-issue-copy correction">{displayCorrection(item)}</span>
           {range.issueIndexes.length > 1 && <small>This location is linked to {range.issueIndexes.length} issues. Use the issue navigator above to review each one.</small>}
@@ -1026,7 +1028,8 @@ export default function CoachWorkspace() {
         <p>{revisionResponse.feedback.length === 0 ? "The independent recheck found no reliably locatable issues. You still need to verify the intended meaning and facts in the final version." : "The second draft was checked independently using the same standard. If an issue already existed in the original but was recognised only now, it is explicitly marked as an initial miss."}</p>
       </div>
       {revisionResponse.revisionComparison?.resolved.length ? <div className="resolved-issue-list"><h2>Original issues not detected again</h2>{revisionResponse.revisionComparison.resolved.map((item, index) => <span key={`${item.category}-${item.quote}-${index}`}><CheckIcon />{displayCategory(item.category)}: {item.quote}</span>)}</div> : null}
-      {revisionResponse.feedback.length > 0 && <div className="revision-review-list"><h2>Issues that still need attention</h2>{revisionResponse.feedback.map((item, index) => <article key={`${item.category}-${index}`}><div className="revision-issue-title"><strong>{index + 1}. {displayCategory(item.category)}</strong>{item.revisionStatus && <span className={`revision-status ${item.revisionStatus}`}>{item.revisionStatus === "partial" ? "Partly revised" : item.revisionStatus === "remaining" ? "Original issue remains" : item.revisionStatus === "changed" ? "Revised location needs attention" : "Missed initially (found on recheck)"}</span>}</div><blockquote>{item.quote}</blockquote><div className="revision-repair-detail">{item.revisionProgress && <><p className="completed-edits"><strong>Completed: </strong>{item.revisionProgress.completed.map(displayEdit).join("; ")}</p><p><strong>Still to revise: </strong>{item.revisionProgress.pending.map(displayEdit).join("; ")}</p></>}<p>{displayCorrection(item)}</p></div></article>)}</div>}
+      <RevisionEditAudit items={revisionResponse.revisionComparison?.editAudit} english />
+      {revisionResponse.feedback.length > 0 && <div className="revision-review-list"><h2>Issues that still need attention</h2>{revisionResponse.feedback.map((item, index) => <article key={`${item.category}-${index}`}><div className="revision-issue-title"><strong>{index + 1}. {displayCategory(item.category)}</strong>{item.revisionStatus && <span className={`revision-status ${item.revisionStatus}`}>{item.revisionStatus === "partial" ? "Partly revised" : item.revisionStatus === "remaining" ? "Original issue remains" : item.revisionStatus === "changed" ? "Revised location needs attention" : "Missed initially (found on recheck)"}</span>}</div><blockquote>{item.quote}</blockquote><div className="revision-repair-detail">{item.revisionProgress && <><p className="completed-edits"><strong>Completed: </strong>{item.revisionProgress.completed.map(displayEdit).join("; ")}</p><p><strong>Still to revise: </strong>{item.revisionProgress.pending.map(displayEdit).join("; ")}</p></>}<p><strong>Why this was flagged: </strong>{displayWhy(item)}</p><p><strong>How to revise: </strong>{displayCorrection(item)}</p></div></article>)}</div>}
       <div className="final-version-stack">
         <article className="version-pane locked"><div><span>Original draft</span><strong>{draftWordCount} words</strong></div><p>{draft}</p></article>
         <article className="version-pane locked"><div><span>Your second draft</span><strong>{revisedWordCount} words</strong></div>{revisionResponse.feedback.length > 0 && <aside className="draft-highlight-legend"><i />Red underlining shows issues that remain after rechecking</aside>}<p><HighlightedDraft text={revisedDraft} feedback={revisionResponse.feedback} /></p></article>
