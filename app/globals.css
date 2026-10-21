@@ -489,3 +489,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .grammar-practice .attempt-review .grammar-practice-answer { background: #f2f5f9; border: 1px solid #cbd5e1; }
 .grammar-practice .attempt-review .practice-attempt-status { color: #465972; }
 @media (max-width: 640px) { .grammar-practice { padding: 16px; } .grammar-practice-heading { align-items: flex-start; flex-direction: column; } .grammar-practice-question { padding: 14px; } }
+/* Busy indicator replaces the action arrow; it never implies progress %. */
+.analysis-spinner { display: inline-block; width: 1.15em; height: 1.15em; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: analysis-spin .8s linear infinite; }
+@keyframes analysis-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .analysis-spinner { animation: none; } }
